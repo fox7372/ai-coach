@@ -524,7 +524,7 @@ def parse_recommended_resources(result: str, course_name: str) -> tuple[str, lis
                 keyword = str(item.get("keyword") or title or course_name).strip()
                 url = str(item.get("url") or "").strip()
                 if not url.startswith(("http://", "https://")):
-                    url = f"https://www.bing.com/search?{urlencode({'q': keyword})}"
+                    url = ""
                 if title and reason:
                     resources.append(
                         RecommendedResource(
@@ -544,21 +544,21 @@ def parse_recommended_resources(result: str, course_name: str) -> tuple[str, lis
             resource_type="教材/讲义",
             reason="作为课程主线资料，用于建立章节结构和核心概念。",
             keyword=f"{course_name} 教材 讲义",
-            url=f"https://www.bing.com/search?{urlencode({'q': f'{course_name} 教材 讲义'})}",
+            url="",
         ),
         RecommendedResource(
             title=f"{course_name} 课程主页或公开课",
             resource_type="网页/视频",
             reason="补充授课顺序、案例和教师强调的重点。",
             keyword=f"{course_name} 课程主页 公开课",
-            url=f"https://www.bing.com/search?{urlencode({'q': f'{course_name} 课程主页 公开课'})}",
+            url="",
         ),
         RecommendedResource(
             title=f"{course_name} 习题与错题训练",
             resource_type="习题",
             reason="用于生成测验、发现薄弱点并更新学习计划。",
             keyword=f"{course_name} 习题 答案 解析",
-            url=f"https://www.bing.com/search?{urlencode({'q': f'{course_name} 习题 答案 解析'})}",
+            url="",
         ),
     ]
     return summary, fallback

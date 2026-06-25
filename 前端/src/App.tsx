@@ -1077,9 +1077,13 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
                     <p className="mt-2 text-slate-600">{item.reason}</p>
                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                       <span className="text-slate-500">搜索关键词：{item.keyword}</span>
-                      <a href={item.url} target="_blank" rel="noreferrer" className="rounded-md border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
-                        打开网址
-                      </a>
+                      {item.url ? (
+                        <a href={item.url} target="_blank" rel="noreferrer" className="rounded-md border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
+                          打开网址
+                        </a>
+                      ) : (
+                        <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-500">暂无直接网址</span>
+                      )}
                     </div>
                   </div>
                 ))}
