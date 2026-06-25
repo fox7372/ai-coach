@@ -395,6 +395,37 @@ def retrieve_relevant_chunks(db: Session, course_id: int, query: str, limit: int
     return scored[:limit]
 
 
+def compact_excerpt(text_value: str, max_length: int = 180) -> str:
+    compact = re.sub(r"\s+", " ", text_value).strip()
+    if len(compact) <= max_length:
+        return compact
+    return compact[:max_length].rstrip() + "..."
+
+
+def chunk_location_label(chunk: DocumentChunk, document: Document | None, index: int, score: float | None = None) -> str:
+    title = document.filename if document else f"资料 {chunk.document_id}"
+    parts = [f"来源 {index}：{title}"]
+    if chunk.page_number:
+        parts.append(f"第 {chunk.page_number} 页")
+    if chunk.section_title:
+        parts.append(chunk.section_title)
+    if chunk.start_time is not None or chunk.end_time is not None:
+        parts.append(f"时间 {format_time(chunk.start_time)}-{format_time(chunk.end_time)}")
+    if score is not None:
+        parts.append(f"相似度 {score:.2f}")
+    return "，".join(parts)
+
+
+def has_direct_text_match(query: str, chunks: list[tuple[DocumentChunk, float]]) -> bool:
+    terms = [item.strip().lower() for item in re.split(r"\s+", query) if len(item.strip()) >= 2]
+    if not terms:
+        compact_query = re.sub(r"\s+", "", query).lower()
+        terms = [compact_query] if len(compact_query) >= 2 else []
+    if not terms:
+        return False
+    return any(any(term in chunk.chunk_text.lower() for term in terms) for chunk, _ in chunks)
+
+
 def clean_subtitle_text(text_value: str) -> str:
     without_tags = re.sub(r"<[^>]+>", "", text_value)
     return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
@@ -1860,10 +1891,23 @@ def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskRespo
 
     retrieved_chunks = retrieve_relevant_chunks(db, payload.course_id, payload.question)
     rag_context = ""
-    if retrieved_chunks:
-        rag_context = "\n\n".join(
-            f"[来源 {index}] {chunk.section_title or f'片段 {chunk.chunk_index + 1}'}\n{chunk.chunk_text}"
-            for index, (chunk, _) in enumerate(retrieved_chunks, start=1)
+    direct_match = has_direct_text_match(payload.question, retrieved_chunks)
+    if retrieved_chunks and direct_match:
+        context_parts = []
+        for index, (chunk, score) in enumerate(retrieved_chunks, start=1):
+            document = db.get(Document, chunk.document_id)
+            label = chunk_location_label(chunk, document, index, score)
+            context_parts.append(f"[{label}]\n{chunk.chunk_text}")
+        rag_context = "\n\n".join(context_parts)
+    elif retrieved_chunks:
+        rag_context = (
+            "检索说明：当前课程资料没有直接命中学生问题中的关键词。"
+            "你可以用操作系统通用知识解释概念，但不能把下面低相关片段说成该知识点的直接出处，"
+            "也不能臆造课程章节、实验或文件位置。\n\n"
+            + "\n\n".join(
+                f"[低相关参考 {index}] {compact_excerpt(chunk.chunk_text, 260)}"
+                for index, (chunk, _) in enumerate(retrieved_chunks[:2], start=1)
+            )
         )
 
     try:
@@ -1873,18 +1917,17 @@ def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskRespo
         answer = f"DeepSeek 调用失败：{exc}"
         provider = "deepseek-error"
 
-    if retrieved_chunks:
+    if retrieved_chunks and direct_match:
         references = []
         for index, (chunk, score) in enumerate(retrieved_chunks, start=1):
             document = db.get(Document, chunk.document_id)
-            title = document.filename if document else f"资料 {chunk.document_id}"
-            start_time = format_time(chunk.start_time)
-            end_time = format_time(chunk.end_time)
             source_url = chunk.source_url or build_timestamp_url(document.source_url if document else None, chunk.start_time)
-            label = f"来源 {index}：{title}，时间 {start_time}-{end_time}，相似度 {score:.2f}"
+            label = chunk_location_label(chunk, document, index, score)
             if source_url:
                 label = f"[{label}]({source_url})"
-            references.append(label)
+            references.append(f"{label}\n  摘录：{compact_excerpt(chunk.chunk_text)}")
+    elif retrieved_chunks:
+        references = ["当前课程资料未直接命中该问题关键词；以下回答包含通用操作系统知识，需要补充更具体讲义或教材片段后再精确核对。"]
     else:
         references = build_references(db, payload.course_id)
     answer_with_references = answer + "\n\n### 核对位置\n" + "\n".join(f"- {item}" for item in references)
