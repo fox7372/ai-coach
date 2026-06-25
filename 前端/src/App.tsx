@@ -275,6 +275,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [dailyPlan, setDailyPlan] = useState('')
+  const [overallPlan, setOverallPlan] = useState('')
   const [quizRaw, setQuizRaw] = useState('')
   const [manualMistake, setManualMistake] = useState('')
   const [notice, setNotice] = useState('')
@@ -293,7 +294,9 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     ])
     setResources(resourceResult as unknown as Resource[])
     setKnowledge(pointResult as unknown as KnowledgePoint[])
-    setSuggestions(suggestionResult as unknown as Suggestion[])
+    const suggestionItems = suggestionResult as unknown as Suggestion[]
+    setSuggestions(suggestionItems)
+    setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
     setMistakes(mistakeResult as unknown as Mistake[])
     setDiagnosis(diagnosisResult as unknown as Diagnosis)
     setProfile(profileResult as unknown as Profile)
@@ -323,7 +326,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     setLoading(true)
     try {
       const result = (await http.post('/api/ai/generate-learning-plan', { user_id: userId, course_id: activeCourse.id, text })) as unknown as { plan: string }
-      setDailyPlan(result.plan)
+      setOverallPlan(result.plan)
       setNotice(text?.trim() ? '已根据你的目标生成整体学习计划。' : '学习建议已生成。')
       await loadDetail()
     } finally {
@@ -411,7 +414,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
         {tab === 'resources' && <ResourcesPanel courseId={activeCourse.id} resources={resources} onChanged={loadDetail} />}
         {tab === 'qa' && <QaView course={activeCourse} userId={userId} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
-        {tab === 'plan' && <PlanPanel dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
+        {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
         {tab === 'quiz' && <QuizPanel raw={quizRaw} loading={loading} onGenerate={generateQuiz} />}
         {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}
@@ -534,12 +537,14 @@ function KnowledgePanel({ items, loading, onGenerate }: { items: KnowledgePoint[
 }
 
 function PlanPanel({
+  overallPlan,
   dailyPlan,
   suggestions,
   loading,
   onGenerate,
   onFeedback,
 }: {
+  overallPlan: string
   dailyPlan: string
   suggestions: Suggestion[]
   loading: boolean
@@ -569,8 +574,25 @@ function PlanPanel({
           <h3 className="font-semibold">个性化学习计划</h3>
           <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">快速生成</button>
         </div>
-        <div className="prose prose-sm mt-4 max-w-none rounded-lg bg-slate-50 p-4">
-          <ReactMarkdown>{dailyPlan || suggestions[0]?.content || '暂无学习计划。'}</ReactMarkdown>
+        <div className="mt-4 grid gap-4">
+          <div>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-slate-700">整体计划</h4>
+              <span className="text-xs text-slate-400">目标 / 阶段 / 节奏</span>
+            </div>
+            <div className="prose prose-sm mt-2 max-w-none rounded-lg bg-emerald-50 p-4">
+              <ReactMarkdown>{overallPlan || suggestions.find((item) => !item.title.startsWith('每日学习计划'))?.content || '暂无整体计划。请在右侧输入目标后生成。'}</ReactMarkdown>
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-slate-700">今日计划</h4>
+              <span className="text-xs text-slate-400">每日反馈后更新</span>
+            </div>
+            <div className="prose prose-sm mt-2 max-w-none rounded-lg bg-slate-50 p-4">
+              <ReactMarkdown>{dailyPlan || '暂无今日计划。'}</ReactMarkdown>
+            </div>
+          </div>
         </div>
       </Panel>
 
