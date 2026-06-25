@@ -7,11 +7,11 @@ $Node = "C:\Users\fox\.cache\codex-runtimes\codex-primary-runtime\dependencies\n
 $Vite = Join-Path $ProjectRoot "node_modules\vite\bin\vite.js"
 
 if (!(Test-Path $Node)) {
-  throw "找不到 Codex 自带 Node：$Node"
+  throw "Codex bundled Node was not found: $Node"
 }
 
 if (!(Test-Path $Vite)) {
-  throw "找不到 Vite：$Vite，请先安装前端依赖。"
+  throw "Vite was not found: $Vite. Please install frontend dependencies first."
 }
 
 & $Node $Vite --host 0.0.0.0 --port 5173
