@@ -564,6 +564,49 @@ def parse_recommended_resources(result: str, course_name: str) -> tuple[str, lis
     return summary, fallback
 
 
+def is_computer_science_course(course_name: str, learning_goal: str | None) -> bool:
+    text_value = f"{course_name} {learning_goal or ''}".lower()
+    keywords = [
+        "计算机",
+        "程序",
+        "编程",
+        "代码",
+        "软件",
+        "操作系统",
+        "os",
+        "数据结构",
+        "算法",
+        "数据库",
+        "计算机网络",
+        "网络",
+        "编译",
+        "机器学习",
+        "深度学习",
+        "人工智能",
+        "ai",
+        "python",
+        "java",
+        "c++",
+        "linux",
+    ]
+    return any(keyword in text_value for keyword in keywords)
+
+
+def add_cs_diy_resource(resources: list[RecommendedResource]) -> list[RecommendedResource]:
+    if any("csdiy.wiki" in item.url for item in resources):
+        return resources
+    return [
+        RecommendedResource(
+            title="CS 自学指南",
+            resource_type="课程索引/路线",
+            reason="计算机相关课程可先从该站点核对公开课、教材、实验和学习路线，再选择合适资料加入平台。",
+            keyword="CS 自学指南 计算机课程",
+            url="https://csdiy.wiki/",
+        ),
+        *resources,
+    ][:8]
+
+
 def find_knowledge_support(name: str, chunks: list[DocumentChunk], fallback: DocumentChunk | None) -> tuple[DocumentChunk | None, str | None, bool]:
     lowered = name.lower()
     for chunk in chunks:
@@ -1105,21 +1148,26 @@ def recommend_course_resources(payload: CourseResourceRecommendRequest) -> Cours
     if not course_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="课程名称不能为空")
 
+    is_cs_course = is_computer_science_course(course_name, payload.learning_goal)
     result = ai_service.generate_text(
         (
             "你是学习资料规划助手。请根据课程名称和学习目标，为学生列出后续应该加入平台的资料。"
             "不要编造确定存在的下载链接，不要声称平台已经拥有这些资料。"
             "如果能确定官网、课程主页或公开课页面，可以给 url；不确定就留空 url。"
+            "如果是计算机相关课程，优先参考 CS 自学指南：https://csdiy.wiki/，可以把它作为课程资料入口。"
             "只输出 JSON，不要 Markdown，不要代码块。"
             "JSON 格式：{\"summary\":\"一句话说明\",\"resources\":[{\"title\":\"资料名称\",\"resource_type\":\"教材/讲义/视频/网页/习题/项目\",\"reason\":\"为什么需要\",\"keyword\":\"建议搜索关键词\",\"url\":\"可核对网址或空字符串\"}]}"
             "resources 数量 4 到 6 个，名称要具体，适合学生后续上传 PDF、导入网页或视频。"
         ),
         (
             f"课程名称：{course_name}\n"
-            f"学习目标：{payload.learning_goal.strip() if payload.learning_goal else '未填写，请按入门到测验的 MVP 学习场景规划。'}"
+            f"学习目标：{payload.learning_goal.strip() if payload.learning_goal else '未填写，请按入门到测验的 MVP 学习场景规划。'}\n"
+            f"是否计算机相关课程：{'是' if is_cs_course else '否'}"
         ),
     )
     summary, resources = parse_recommended_resources(result, course_name)
+    if is_cs_course:
+        resources = add_cs_diy_resource(resources)
     return CourseResourceRecommendResponse(course_name=course_name, summary=summary, resources=resources)
 
 
