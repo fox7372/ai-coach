@@ -1570,9 +1570,33 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
 def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     course_name = get_course_name(db, payload.course_id)
     context = get_course_context(db, payload.course_id, payload.text)
+    study_date = date.today().isoformat()
+    daily_plan = db.scalar(
+        select(LearningSuggestion)
+        .where(
+            LearningSuggestion.user_id == payload.user_id,
+            LearningSuggestion.course_id == payload.course_id,
+            LearningSuggestion.title == f"每日学习计划 {study_date}",
+        )
+        .order_by(LearningSuggestion.id.desc())
+    )
+    quiz_focus = payload.text.strip() if payload.text else ""
     result = ai_service.generate_text(
-        "你是出题助手。请生成测验题。每题包含题目、参考答案、解析。题目以 Q: 开头，答案以 A: 开头，解析以 E: 开头。",
-        f"课程：{course_name}\n题目数量：{payload.count}\n资料内容：\n{context}",
+        (
+            "你是严谨的课程检测出题助手。请用简体中文生成测验题，避免乱码、繁体字和无关英文。"
+            "出题依据优先级：1. 用户检测需求；2. 今日学习计划；3. 课程资料。"
+            "题目必须围绕当天学习内容或用户指定范围，不要泛泛覆盖整门课。"
+            "每题包含题目、参考答案、解析、检测点。"
+            "格式必须严格为 Markdown，不要使用表格。"
+            "每题格式：### 第N题\nQ: ...\nA: ...\nE: ...\n检测点: ..."
+        ),
+        (
+            f"课程：{course_name}\n"
+            f"题目数量：{payload.count}\n"
+            f"用户检测需求：{quiz_focus or '未指定，请根据今日学习计划检测。'}\n"
+            f"今日学习计划：\n{daily_plan.content if daily_plan else '暂无今日学习计划。'}\n\n"
+            f"课程资料：\n{context}"
+        ),
     )
     questions: list[Question] = []
     blocks = [block.strip() for block in result.split("\n\n") if block.strip()]

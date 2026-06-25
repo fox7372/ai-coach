@@ -360,10 +360,10 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     }
   }
 
-  async function generateQuiz() {
+  async function generateQuiz(text?: string) {
     setLoading(true)
     try {
-      const result = (await http.post('/api/ai/generate-quiz', { user_id: userId, course_id: activeCourse.id, count: 5 })) as unknown as { raw: string }
+      const result = (await http.post('/api/ai/generate-quiz', { user_id: userId, course_id: activeCourse.id, count: 5, text })) as unknown as { raw: string }
       setQuizRaw(result.raw)
       setNotice('测验题已生成。')
     } finally {
@@ -731,12 +731,38 @@ function PlanPanel({
   )
 }
 
-function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean; onGenerate: () => Promise<void> }) {
+function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean; onGenerate: (text?: string) => Promise<void> }) {
+  const [quizFocus, setQuizFocus] = useState('')
+
+  async function submitQuiz(text?: string) {
+    await onGenerate(text ?? quizFocus)
+  }
+
   return (
     <Panel>
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-semibold">测验生成</h3>
-        <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">生成 5 道题</button>
+        <div>
+          <h3 className="font-semibold">测验生成</h3>
+          <p className="mt-1 text-sm text-slate-500">默认按今日学习计划检测，也可以指定检测范围。</p>
+        </div>
+        <button onClick={() => void submitQuiz('按今日学习计划检测当前学习内容')} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">检测今日内容</button>
+      </div>
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <label className="block text-sm font-medium text-slate-700">
+          检测需求
+          <textarea
+            value={quizFocus}
+            onChange={(event) => setQuizFocus(event.target.value)}
+            rows={3}
+            className="mt-2 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-500"
+            placeholder="例如：检测系统调用、进程同步；或者检测今天计划里的重点。"
+          />
+        </label>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button onClick={() => void submitQuiz()} disabled={loading} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">按我的需求生成</button>
+          <button onClick={() => { setQuizFocus('检测今天学习计划中的核心知识点和任务完成情况'); void submitQuiz('检测今天学习计划中的核心知识点和任务完成情况') }} disabled={loading} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-white disabled:text-slate-400">今日计划</button>
+          <button onClick={() => { setQuizFocus('检测最近错题暴露的薄弱点'); void submitQuiz('检测最近错题暴露的薄弱点') }} disabled={loading} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-white disabled:text-slate-400">薄弱点</button>
+        </div>
       </div>
       <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
         <ReactMarkdown>{raw || '点击生成测验题。后续可以继续接入答题判分。'}</ReactMarkdown>
