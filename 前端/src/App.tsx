@@ -85,15 +85,18 @@ function statusClass(status: ImportStatus) {
   return 'border-slate-200 bg-slate-50 text-slate-600'
 }
 
-function Panel({ children }: { children: React.ReactNode }) {
-  return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">{children}</section>
+function Panel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <section className={`panel-surface p-5 ${className}`}>{children}</section>
 }
 
 function LoadingNotice({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-      <Loader2 className="animate-spin" size={18} />
-      <span>{text}</span>
+    <div className="flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50/85 px-4 py-3 text-sm text-emerald-800">
+      <span className="relative flex h-5 w-5 items-center justify-center">
+        <span className="absolute h-5 w-5 animate-ping rounded-full bg-emerald-300 opacity-40" />
+        <Loader2 className="relative animate-spin" size={18} />
+      </span>
+      <span className="font-medium">{text}</span>
     </div>
   )
 }
@@ -168,27 +171,43 @@ function App() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-slate-950 text-slate-100">
-        <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6">
-          <section className="grid w-full gap-8 lg:grid-cols-[1fr_420px]">
-            <div className="flex flex-col justify-center">
-              <p className="text-sm font-semibold text-emerald-300">AI Learning MVP</p>
-              <h1 className="mt-4 text-4xl font-bold tracking-tight">个性化异步学习平台</h1>
-              <p className="mt-4 max-w-xl text-slate-300">课程资料、RAG 问答、错题诊断、知识画像和学习计划形成完整学习闭环。</p>
+      <main className="app-shell min-h-[100dvh] text-slate-900">
+        <div className="mx-auto flex min-h-[100dvh] max-w-7xl items-center px-6 py-10">
+          <section className="grid w-full items-center gap-10 lg:grid-cols-[1fr_430px]">
+            <div className="max-w-3xl">
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-sm font-semibold text-emerald-700 shadow-sm">
+                <BrainCircuit size={16} />
+                AI Learning MVP
+              </div>
+              <h1 className="balanced-text mt-6 text-5xl font-semibold leading-tight text-slate-950 md:text-6xl">个性化异步学习平台</h1>
+              <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">围绕课程资料、RAG 问答、错题诊断、知识画像和每日计划，形成一条学生能反复使用的学习闭环。</p>
+              <div className="mt-8 grid max-w-2xl gap-3 sm:grid-cols-3">
+                {[
+                  ['资料', 'PDF / 网页 / 视频'],
+                  ['诊断', '错题和掌握度'],
+                  ['计划', '整体和每日同步'],
+                ].map(([label, value]) => (
+                  <div key={label} className="soft-card p-4">
+                    <p className="text-sm font-semibold text-emerald-700">{label}</p>
+                    <p className="mt-1 text-sm text-slate-600">{value}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-            <form onSubmit={submitAuth} className="rounded-lg border border-slate-800 bg-white p-6 text-slate-900 shadow-xl">
-              <h2 className="text-xl font-semibold">{authMode === 'login' ? '学生登录' : '注册账号'}</h2>
+            <form onSubmit={submitAuth} className="panel-surface p-6 text-slate-900">
+              <h2 className="text-2xl font-semibold text-slate-950">{authMode === 'login' ? '学生登录' : '注册账号'}</h2>
+              <p className="mt-2 text-sm text-slate-500">进入课程工作台后再上传资料、配置 AI 和查看学习诊断。</p>
               <label className="mt-5 block text-sm font-medium">
                 账号
-                <input value={username} onChange={(event) => setUsername(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
+                <input value={username} onChange={(event) => setUsername(event.target.value)} className="input-surface mt-2 w-full px-3 py-2.5 outline-none" />
               </label>
               <label className="mt-4 block text-sm font-medium">
                 密码
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
+                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="input-surface mt-2 w-full px-3 py-2.5 outline-none" />
               </label>
-              {authMessage && <p className={`mt-3 rounded-md px-3 py-2 text-sm ${authMessage.includes('成功') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{authMessage}</p>}
-              <button disabled={authLoading} className="mt-5 w-full rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">{authLoading ? '处理中...' : authMode === 'login' ? '登录' : '注册'}</button>
-              <button type="button" disabled={authLoading} onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-3 w-full rounded-md border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100">
+              {authMessage && <p className={`mt-3 rounded-xl px-3 py-2 text-sm ${authMessage.includes('成功') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{authMessage}</p>}
+              <button disabled={authLoading} className="primary-action mt-5 w-full rounded-xl px-4 py-2.5 font-semibold disabled:bg-slate-400">{authLoading ? '处理中...' : authMode === 'login' ? '登录' : '注册'}</button>
+              <button type="button" disabled={authLoading} onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="secondary-action mt-3 w-full rounded-xl px-4 py-2.5 text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-100">
                 {authMode === 'login' ? '注册账号' : '返回登录'}
               </button>
             </form>
@@ -199,22 +218,22 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 text-slate-900">
-      <aside className="fixed inset-y-0 left-0 w-64 overflow-y-auto bg-slate-950 p-5 text-white">
+    <main className="app-shell min-h-[100dvh] text-slate-900">
+      <aside className="sidebar-surface fixed inset-y-0 left-0 w-72 overflow-y-auto p-5 text-white">
         <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-md bg-emerald-500 font-bold">学</div>
+          <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-500 font-bold shadow-lg shadow-emerald-900/20">学</div>
           <div>
-            <p className="font-semibold">智学诊断台</p>
+            <p className="font-semibold tracking-wide">智学诊断台</p>
             <p className="text-xs text-slate-400">AI Learning MVP</p>
           </div>
         </div>
         <nav className="mt-8 grid gap-2">
           <SideButton active={mainView === 'courses'} icon={<BookOpen size={18} />} label="课程" onClick={() => setMainView('courses')} />
-          <div className={`rounded-md ${mainView === 'detail' ? 'bg-slate-900/80' : ''}`}>
+          <div className={`rounded-2xl ${mainView === 'detail' ? 'bg-white/7 p-1' : ''}`}>
             <SideButton active={mainView === 'detail'} icon={<Layers3 size={18} />} label="课程详情" onClick={() => setMainView('detail')} />
-            <div className="ml-6 mt-2 grid gap-1 border-l border-slate-800 pb-2 pl-3">
+            <div className="ml-6 mt-2 grid gap-1 border-l border-white/10 pb-2 pl-3">
               {courses.map((course) => (
-                <button key={course.id} onClick={() => openCourse(course.id)} className={`rounded-md px-3 py-2 text-left text-sm ${selectedCourse?.id === course.id && mainView === 'detail' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}>
+                <button key={course.id} onClick={() => openCourse(course.id)} className={`rounded-xl px-3 py-2 text-left text-sm ${selectedCourse?.id === course.id && mainView === 'detail' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/20' : 'text-slate-300 hover:bg-white/8 hover:text-white'}`}>
                   {course.name}
                 </button>
               ))}
@@ -225,18 +244,18 @@ function App() {
           <SideButton active={mainView === 'settings'} icon={<Settings size={18} />} label="设置" onClick={() => setMainView('settings')} />
         </nav>
       </aside>
-      <section className="ml-64 min-h-screen">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-8 py-5">
+      <section className="ml-72 min-h-[100dvh]">
+        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200/70 bg-white/78 px-8 py-5 backdrop-blur">
           <div>
-            <p className="text-sm text-slate-500">React + FastAPI + MariaDB</p>
-            <h1 className="text-2xl font-semibold">{selectedCourse?.name || 'AI 学习诊断系统'}</h1>
+            <p className="text-sm font-medium text-emerald-700">React + FastAPI + MariaDB</p>
+            <h1 className="balanced-text text-2xl font-semibold text-slate-950">{selectedCourse?.name || 'AI 学习诊断系统'}</h1>
           </div>
-          <button onClick={() => setUser(null)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50">
+          <button onClick={() => setUser(null)} className="secondary-action inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm">
             <LogOut size={16} />
             退出
           </button>
         </header>
-        <div className="p-8">
+        <div className="mx-auto max-w-[1440px] p-8">
           {mainView === 'courses' && <CoursesView courses={courses} onOpen={openCourse} onDelete={deleteCourse} />}
           {mainView === 'detail' && <CourseDetailView course={selectedCourse} userId={user.id} />}
           {mainView === 'upload' && <UploadView userId={user.id} courses={courses} onCoursesChanged={loadCourses} />}
@@ -249,7 +268,7 @@ function App() {
 
 function SideButton({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
-    <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium ${active ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}>
+    <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/20' : 'text-slate-300 hover:bg-white/8 hover:text-white'}`}>
       {icon}
       {label}
     </button>
@@ -259,26 +278,39 @@ function SideButton({ active, icon, label, onClick }: { active: boolean; icon: R
 function CoursesView({ courses, onOpen, onDelete }: { courses: Course[]; onOpen: (id: number) => void; onDelete: (id: number) => Promise<void> }) {
   return (
     <div>
-      <h2 className="text-xl font-semibold">课程列表</h2>
-      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-emerald-700">课程工作区</p>
+          <h2 className="mt-1 text-3xl font-semibold text-slate-950">课程列表</h2>
+          <p className="mt-2 max-w-2xl text-sm text-slate-500">每门课程都有独立资料、问答、计划、测验和错题库。</p>
+        </div>
+        <div className="soft-card px-4 py-3 text-sm text-slate-600">共 {courses.length} 门课程</div>
+      </div>
+      <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {courses.map((course) => (
-          <Panel key={course.id}>
+          <Panel key={course.id} className="group overflow-hidden">
             <div className="flex items-start justify-between gap-3">
-              <button onClick={() => onOpen(course.id)} className="text-left">
-                <p className="font-semibold">{course.name}</p>
-                <p className="mt-1 text-sm text-slate-500">{course.description || '暂无说明'}</p>
+              <button onClick={() => onOpen(course.id)} className="min-w-0 flex-1 text-left">
+                <p className="truncate text-lg font-semibold text-slate-950 group-hover:text-emerald-700">{course.name}</p>
+                <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{course.description || '暂无说明'}</p>
               </button>
-              <button onClick={() => void onDelete(course.id)} className="rounded-md p-2 text-red-500 hover:bg-red-50" title="删除课程">
+              <button onClick={() => void onDelete(course.id)} className="rounded-xl p-2 text-slate-400 hover:bg-red-50 hover:text-red-600" title="删除课程">
                 <Trash2 size={16} />
               </button>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-md bg-slate-50 p-3">进度 {course.progress}%</div>
-              <div className="rounded-md bg-slate-50 p-3">掌握 {course.mastery}%</div>
+            <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+              <div className="soft-card p-3">
+                <p className="text-xs text-slate-500">进度</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{course.progress}%</p>
+              </div>
+              <div className="soft-card p-3">
+                <p className="text-xs text-slate-500">掌握</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{course.mastery}%</p>
+              </div>
             </div>
           </Panel>
         ))}
-        {!courses.length && <p className="text-sm text-slate-500">暂无课程。成功导入资料后才会生成课程。</p>}
+        {!courses.length && <Panel className="md:col-span-2 xl:col-span-3"><p className="text-sm text-slate-500">暂无课程。可以在“上传/导入”中上传资料，或用 AI 推荐资料先创建课程。</p></Panel>}
       </div>
     </div>
   )
@@ -432,16 +464,24 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">课程详情</h2>
-          <p className="mt-1 text-sm text-slate-500">{activeCourse.name}</p>
+      <div className="panel-surface overflow-hidden p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-emerald-700">课程详情</p>
+            <h2 className="balanced-text mt-1 text-3xl font-semibold text-slate-950">{activeCourse.name}</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{activeCourse.description || '暂无课程说明。'}</p>
+          </div>
+          {notice && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{notice}</p>}
         </div>
-        {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>}
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="soft-card p-3"><p className="text-xs text-slate-500">进度</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.progress}%</p></div>
+          <div className="soft-card p-3"><p className="text-xs text-slate-500">掌握</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.mastery}%</p></div>
+          <div className="soft-card p-3"><p className="text-xs text-slate-500">子目录</p><p className="mt-1 text-xl font-semibold text-slate-950">{tabs.length}</p></div>
+        </div>
       </div>
-      <div className="mt-5 flex flex-wrap gap-2">
+      <div className="mt-5 flex flex-wrap gap-2 rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-sm">
         {tabs.map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)} className={`rounded-md px-3 py-2 text-sm font-medium ${tab === key ? 'bg-emerald-600 text-white' : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+          <button key={key} onClick={() => setTab(key)} className={`rounded-xl px-3 py-2 text-sm font-medium ${tab === key ? 'bg-slate-950 text-white shadow-lg shadow-slate-900/10' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}>
             {label}
           </button>
         ))}
@@ -476,11 +516,11 @@ function Overview({ course, resources, knowledge, mistakes, suggestions }: { cou
 
 function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-3">
-      <div className="grid h-10 w-10 place-items-center rounded-md bg-emerald-50 text-emerald-700">{icon}</div>
+    <div className="flex items-center gap-4">
+      <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700">{icon}</div>
       <div>
         <p className="text-sm text-slate-500">{label}</p>
-        <p className="text-xl font-semibold">{value}</p>
+        <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
       </div>
     </div>
   )
@@ -1061,20 +1101,29 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
 
   return (
     <div>
-      <h2 className="text-xl font-semibold">上传/导入资料</h2>
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-emerald-700">资料入口</p>
+          <h2 className="mt-1 text-3xl font-semibold text-slate-950">上传/导入资料</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">可以先用 AI 推荐资料创建课程，也可以直接上传 PDF、导入视频或网页。已有课程同名时会加入原课程。</p>
+        </div>
+        <div className={`rounded-2xl border px-4 py-3 text-sm ${statusClass(status)}`}>
+          {status === 'loading' ? '处理中' : status === 'success' ? '最近成功' : status === 'error' ? '需要处理' : '等待导入'}
+        </div>
+      </div>
+      <div className="mt-6 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
         <div className="grid gap-5">
-          <Panel>
+          <Panel className="bg-white/92">
             <label className="block text-sm font-medium">
               课程名称
-              <input value={courseName} onChange={(event) => setCourseName(event.target.value)} placeholder="不填则使用资料名称" className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
+              <input value={courseName} onChange={(event) => setCourseName(event.target.value)} placeholder="不填则使用资料名称" className="input-surface mt-2 w-full px-3 py-2.5 outline-none" />
             </label>
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">
-              <BrainCircuit className="text-emerald-600" />
+              <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><BrainCircuit /></div>
               <div>
-                <h3 className="font-semibold">无资料创建课程</h3>
+                <h3 className="text-lg font-semibold text-slate-950">无资料创建课程</h3>
                 <p className="text-sm text-slate-500">先创建课程，AI 罗列建议加入的资料，后续再补充 PDF、网页或视频。</p>
               </div>
             </div>
@@ -1083,24 +1132,24 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               onChange={(event) => setLearningGoal(event.target.value)}
               rows={3}
               placeholder="学习目标，例如：30 天掌握操作系统基础并完成实验。"
-              className="mt-4 w-full resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+              className="input-surface mt-4 w-full resize-none px-3 py-2.5 outline-none"
             />
-            <button onClick={() => void createCourseWithAiResources()} disabled={status === 'loading'} className="mt-3 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-400">
+            <button onClick={() => void createCourseWithAiResources()} disabled={status === 'loading'} className="primary-action mt-3 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
               {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
               AI 推荐并创建课程
             </button>
             {recommendedResources.length > 0 && (
               <div className="mt-4 grid gap-3">
                 {recommendedResources.map((item, index) => (
-                  <div key={`${item.resource_type}-${item.title}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <div key={`${item.resource_type}-${item.title}`} className="soft-card p-3 text-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="font-semibold text-slate-800">{item.title}</p>
                       <div className="flex items-center gap-2">
-                        <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-600">{item.resource_type}</span>
+                        <span className="rounded-lg bg-white px-2 py-1 text-xs text-slate-600">{item.resource_type}</span>
                         <button
                           type="button"
                           onClick={() => setRecommendedResources((items) => items.filter((_, itemIndex) => itemIndex !== index))}
-                          className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-red-600"
+                          className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-red-600"
                           title="删除这条推荐"
                         >
                           <Trash2 size={14} />
@@ -1112,15 +1161,15 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
                       <span className="text-slate-500">搜索关键词：{item.keyword}</span>
                       {item.url ? (
                         <>
-                          <a href={item.url} target="_blank" rel="noreferrer" className="rounded-md border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
+                          <a href={item.url} target="_blank" rel="noreferrer" className="rounded-lg border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
                             打开网址
                           </a>
-                          <button type="button" onClick={() => void addRecommendedResource(item, index)} disabled={status === 'loading'} className="rounded-md bg-emerald-600 px-2 py-1 font-medium text-white hover:bg-emerald-700 disabled:bg-slate-400">
+                          <button type="button" onClick={() => void addRecommendedResource(item, index)} disabled={status === 'loading'} className="rounded-lg bg-emerald-600 px-2 py-1 font-medium text-white hover:bg-emerald-700 disabled:bg-slate-400">
                             加入课程
                           </button>
                         </>
                       ) : (
-                        <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-500">暂无直接网址</span>
+                        <span className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-500">暂无直接网址</span>
                       )}
                     </div>
                   </div>
@@ -1130,13 +1179,13 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">
-              <FileText className="text-emerald-600" />
+              <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><FileText /></div>
               <div>
-                <h3 className="font-semibold">上传 PDF</h3>
+                <h3 className="text-lg font-semibold text-slate-950">上传 PDF</h3>
                 <p className="text-sm text-slate-500">上传成功后才会生成或保留课程。</p>
               </div>
             </div>
-            <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+            <label className="primary-action mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold">
               <FileUp size={16} />
               选择文件
               <input type="file" accept=".pdf" className="hidden" onChange={uploadPdf} />
@@ -1145,38 +1194,38 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">
-              <Video className="text-emerald-600" />
+              <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Video /></div>
               <div>
-                <h3 className="font-semibold">导入在线视频</h3>
+                <h3 className="text-lg font-semibold text-slate-950">导入在线视频</h3>
                 <p className="text-sm text-slate-500">一行一个链接；全部失败时会删除本次新建课程。</p>
               </div>
             </div>
-            <textarea value={videoUrls} onChange={(event) => setVideoUrls(event.target.value)} rows={5} placeholder="https://www.bilibili.com/video/BV.../\nhttps://www.youtube.com/watch?v=..." className="mt-4 w-full resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
-            <button onClick={() => void importVideos()} disabled={status === 'loading'} className="mt-3 inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">
+            <textarea value={videoUrls} onChange={(event) => setVideoUrls(event.target.value)} rows={5} placeholder="https://www.bilibili.com/video/BV.../\nhttps://www.youtube.com/watch?v=..." className="input-surface mt-4 w-full resize-none px-3 py-2.5 outline-none" />
+            <button onClick={() => void importVideos()} disabled={status === 'loading'} className="primary-action mt-3 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
               {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
               导入视频
             </button>
           </Panel>
           <Panel>
-            <h3 className="font-semibold">导入网页资料</h3>
+            <h3 className="text-lg font-semibold text-slate-950">导入网页资料</h3>
             <p className="mt-1 text-sm text-slate-500">例如课程主页、讲义页面。导入失败不会保留空课程。</p>
-            <input value={webUrl} onChange={(event) => setWebUrl(event.target.value)} className="mt-4 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
-            <button onClick={() => void importWebpage()} disabled={status === 'loading'} className="mt-3 inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">
+            <input value={webUrl} onChange={(event) => setWebUrl(event.target.value)} className="input-surface mt-4 w-full px-3 py-2.5 outline-none" />
+            <button onClick={() => void importWebpage()} disabled={status === 'loading'} className="primary-action mt-3 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
               {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
               导入网页
             </button>
           </Panel>
         </div>
-        <Panel>
-          <h3 className="font-semibold">导入状态</h3>
-          <div className={`mt-4 rounded-lg border p-4 ${statusClass(status)}`}>
+        <Panel className="h-fit xl:sticky xl:top-28">
+          <h3 className="text-lg font-semibold text-slate-950">导入状态</h3>
+          <div className={`mt-4 rounded-2xl border p-4 ${statusClass(status)}`}>
             <div className="flex gap-3">
               {status === 'loading' ? <Loader2 className="animate-spin" /> : status === 'success' ? <CheckCircle2 /> : status === 'error' ? <AlertCircle /> : <FileText />}
               <p className="text-sm">{message}</p>
             </div>
           </div>
           {lastResource && (
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+            <div className="soft-card mt-4 p-4 text-sm">
               <p className="font-semibold">{lastResource.title}</p>
               <p className="mt-1 text-slate-500">类型：{lastResource.source_type || '-'}，状态：{lastResource.status || '-'}，片段：{lastResource.chunk_count}</p>
               {lastResource.error_message && <p className="mt-2 text-red-600">{lastResource.error_message}</p>}
