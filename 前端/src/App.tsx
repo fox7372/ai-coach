@@ -81,6 +81,15 @@ function Panel({ children }: { children: React.ReactNode }) {
   return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">{children}</section>
 }
 
+function LoadingNotice({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+      <Loader2 className="animate-spin" size={18} />
+      <span>{text}</span>
+    </div>
+  )
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [username, setUsername] = useState('demo')
@@ -626,6 +635,7 @@ function PlanPanel({
       </div>
 
       <div className="mt-5">
+        {loading && <div className="mb-4"><LoadingNotice text={planEditing ? 'AI 正在根据你的对话修改整体计划，并同步更新今日计划...' : 'AI 正在生成学习计划...'} /></div>}
         {planView === 'overall' && (
           <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
             <div>
@@ -656,7 +666,7 @@ function PlanPanel({
                 className="mt-4 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500"
                 placeholder="例如：把计划压缩到 7 天；每天最多 40 分钟；先做实验再看理论；增加系统调用练习。"
               />
-              <button onClick={() => void submitOverallPlan()} disabled={loading || planEditing || !goalText.trim()} className="mt-3 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{planEditing ? '正在同步...' : '发送修改并同步今日计划'}</button>
+              <button onClick={() => void submitOverallPlan()} disabled={loading || planEditing || !goalText.trim()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{planEditing && <Loader2 className="animate-spin" size={16} />}{planEditing ? '正在同步...' : '发送修改并同步今日计划'}</button>
             </div>
           </div>
         )}
@@ -705,7 +715,7 @@ function PlanPanel({
                 className="mt-3 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500"
                 placeholder="例如：今天看完第一节，但矩阵乘法例题还是不会，想明天多练 3 道基础题。"
               />
-              <button onClick={() => void submitFeedback()} disabled={loading || !feedback.trim()} className="mt-3 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据反馈更新今日计划</button>
+              <button onClick={() => void submitFeedback()} disabled={loading || !feedback.trim()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}根据反馈更新今日计划</button>
             </div>
           </div>
         )}
@@ -745,8 +755,9 @@ function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean
           <h3 className="font-semibold">测验生成</h3>
           <p className="mt-1 text-sm text-slate-500">默认按今日学习计划检测，也可以指定检测范围。</p>
         </div>
-        <button onClick={() => void submitQuiz('按今日学习计划检测当前学习内容')} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">检测今日内容</button>
+        <button onClick={() => void submitQuiz('按今日学习计划检测当前学习内容')} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}检测今日内容</button>
       </div>
+      {loading && <div className="mt-4"><LoadingNotice text="AI 正在根据检测范围生成测试题..." /></div>}
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
         <label className="block text-sm font-medium text-slate-700">
           检测需求
@@ -759,7 +770,7 @@ function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean
           />
         </label>
         <div className="mt-3 flex flex-wrap gap-2">
-          <button onClick={() => void submitQuiz()} disabled={loading} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">按我的需求生成</button>
+          <button onClick={() => void submitQuiz()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}按我的需求生成</button>
           <button onClick={() => { setQuizFocus('检测今天学习计划中的核心知识点和任务完成情况'); void submitQuiz('检测今天学习计划中的核心知识点和任务完成情况') }} disabled={loading} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-white disabled:text-slate-400">今日计划</button>
           <button onClick={() => { setQuizFocus('检测最近错题暴露的薄弱点'); void submitQuiz('检测最近错题暴露的薄弱点') }} disabled={loading} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-white disabled:text-slate-400">薄弱点</button>
         </div>
@@ -1179,13 +1190,13 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
             </div>
           ))}
           {!messages.length && !historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">选择一个历史对话，或新建对话后开始提问。</div>}
-          {loading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">AI 正在回答...</div>}
+          {loading && <LoadingNotice text="AI 正在检索课程资料并生成回答..." />}
         </div>
         <div className="mt-4 flex gap-3">
           <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} rows={3} className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" placeholder="输入问题，Enter 发送" />
           <button onClick={() => void ask()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">
-            <Send size={16} />
-            发送
+            {loading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+            {loading ? '回答中' : '发送'}
           </button>
         </div>
       </Panel>
