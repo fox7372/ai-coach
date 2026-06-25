@@ -315,6 +315,16 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   useEffect(() => {
     setNotice('')
+    setResources([])
+    setKnowledge([])
+    setSuggestions([])
+    setMistakes([])
+    setDiagnosis(null)
+    setProfile(null)
+    setDailyPlan('')
+    setOverallPlan('')
+    setQuizRaw('')
+    setManualMistake('')
     void loadDetail()
   }, [course?.id])
 
@@ -434,7 +444,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
         {tab === 'qa' && <QaView course={activeCourse} userId={userId} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
         {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
-        {tab === 'quiz' && <QuizPanel raw={quizRaw} loading={loading} onGenerate={generateQuiz} />}
+        {tab === 'quiz' && <QuizPanel courseName={activeCourse.name} raw={quizRaw} loading={loading} onGenerate={generateQuiz} />}
         {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}
         {tab === 'profile' && <ProfilePanel profile={profile} />}
@@ -741,7 +751,7 @@ function PlanPanel({
   )
 }
 
-function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean; onGenerate: (text?: string) => Promise<void> }) {
+function QuizPanel({ courseName, raw, loading, onGenerate }: { courseName: string; raw: string; loading: boolean; onGenerate: (text?: string) => Promise<void> }) {
   const [quizFocus, setQuizFocus] = useState('')
 
   async function submitQuiz(text?: string) {
@@ -753,7 +763,7 @@ function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="font-semibold">测验生成</h3>
-          <p className="mt-1 text-sm text-slate-500">默认按今日学习计划检测，也可以指定检测范围。</p>
+          <p className="mt-1 text-sm text-slate-500">当前课程：{courseName}。默认按今日学习计划检测，也可以指定检测范围。</p>
         </div>
         <button onClick={() => void submitQuiz('按今日学习计划检测当前学习内容')} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}检测今日内容</button>
       </div>
@@ -776,7 +786,7 @@ function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean
         </div>
       </div>
       <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
-        <ReactMarkdown>{raw || '点击生成测验题。后续可以继续接入答题判分。'}</ReactMarkdown>
+        <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
       </div>
     </Panel>
   )
