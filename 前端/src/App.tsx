@@ -13,6 +13,7 @@ import {
   LogOut,
   MessageSquare,
   Plus,
+  Search,
   Send,
   Settings,
   Target,
@@ -58,7 +59,9 @@ type Mistake = {
 }
 type Diagnosis = { progress: number; mastery: number; items: Array<{ label: string; value: number; status: string }> }
 type Profile = { radar: Array<{ name: string; value: number }>; conclusion: string }
-type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string }
+type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string; created_at?: string }
+type ChatSession = { id: number; title: string; course_id: number; created_at: string; updated_at: string }
+type ChatSearchResult = ChatMessage & { session_id: number; session_title: string }
 type PlanFeedback = {
   status: 'not_started' | 'studying' | 'completed' | 'stuck'
   minutes: number
@@ -906,7 +909,59 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
 function QaView({ course, userId }: { course: Course | null; userId: number }) {
   const [question, setQuestion] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null)
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [searchResults, setSearchResults] = useState<ChatSearchResult[]>([])
   const [loading, setLoading] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  async function loadSessions(preferredSessionId?: number | null) {
+    if (!course) return
+    const result = (await http.get(`/qa/sessions?user_id=${userId}&course_id=${course.id}`)) as unknown as ChatSession[]
+    setSessions(result)
+    const nextSessionId = preferredSessionId !== undefined ? preferredSessionId : activeSessionId || result[0]?.id || null
+    setActiveSessionId(nextSessionId)
+    if (nextSessionId) await loadMessages(nextSessionId)
+  }
+
+  async function loadMessages(sessionId: number) {
+    if (!course) return
+    setHistoryLoading(true)
+    try {
+      const result = (await http.get(`/qa/messages?user_id=${userId}&course_id=${course.id}&session_id=${sessionId}`)) as unknown as ChatMessage[]
+      setMessages(result)
+      setActiveSessionId(sessionId)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  async function createSession() {
+    if (!course) return
+    const session = (await http.post('/qa/sessions', { user_id: userId, course_id: course.id, title: '新对话' })) as unknown as ChatSession
+    setQuestion('')
+    setMessages([])
+    await loadSessions(session.id)
+  }
+
+  async function deleteSession(sessionId: number) {
+    if (!course) return
+    await http.delete(`/qa/sessions/${sessionId}?user_id=${userId}`)
+    setMessages([])
+    setActiveSessionId(null)
+    await loadSessions(null)
+  }
+
+  async function searchHistory(keyword: string) {
+    setSearchKeyword(keyword)
+    if (!course || !keyword.trim()) {
+      setSearchResults([])
+      return
+    }
+    const result = (await http.get(`/qa/messages/search?user_id=${userId}&course_id=${course.id}&keyword=${encodeURIComponent(keyword.trim())}`)) as unknown as ChatSearchResult[]
+    setSearchResults(result)
+  }
 
   async function ask() {
     if (!course || !question.trim()) return
@@ -915,8 +970,9 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
     setMessages((items) => [...items, { id: `u-${Date.now()}`, role: 'user', content: current }])
     setLoading(true)
     try {
-      const result = (await http.post('/qa/ask', { question: current, course_id: course.id, user_id: userId })) as unknown as { answer: string; assistant_message_id: number }
+      const result = (await http.post('/qa/ask', { question: current, course_id: course.id, user_id: userId, session_id: activeSessionId })) as unknown as { answer: string; assistant_message_id: number }
       setMessages((items) => [...items, { id: result.assistant_message_id, role: 'assistant', content: result.answer }])
+      await loadSessions(activeSessionId || undefined)
     } catch (error: any) {
       setMessages((items) => [...items, { id: `e-${Date.now()}`, role: 'assistant', content: error?.response?.data?.detail || '问答失败' }])
     } finally {
@@ -924,28 +980,87 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
     }
   }
 
+  useEffect(() => {
+    setQuestion('')
+    setMessages([])
+    setSessions([])
+    setActiveSessionId(null)
+    setSearchKeyword('')
+    setSearchResults([])
+    void loadSessions()
+  }, [course?.id])
+
   if (!course) return <Panel>请先成功导入资料生成课程。</Panel>
 
   return (
-    <Panel>
-      <h3 className="font-semibold">AI 问答</h3>
-      <p className="mt-1 text-sm text-slate-500">当前课程：{course.name}</p>
-      <div className="mt-4 grid gap-3">
-        {messages.map((message) => (
-          <div key={message.id} className={`rounded-lg p-4 ${message.role === 'user' ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50'}`}>
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+    <div className="grid gap-5 xl:grid-cols-[300px_1fr]">
+      <Panel>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">对话历史</h3>
+            <p className="mt-1 text-xs text-slate-500">{course.name}</p>
           </div>
-        ))}
-        {loading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">AI 正在回答...</div>}
-      </div>
-      <div className="mt-4 flex gap-3">
-        <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} rows={3} className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" placeholder="输入问题，Enter 发送" />
-        <button onClick={() => void ask()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">
-          <Send size={16} />
-          发送
-        </button>
-      </div>
-    </Panel>
+          <button onClick={() => void createSession()} className="grid h-9 w-9 place-items-center rounded-md bg-emerald-600 text-white" title="新建对话">
+            <Plus size={16} />
+          </button>
+        </div>
+
+        <label className="mt-4 flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2">
+          <Search size={16} className="text-slate-400" />
+          <input value={searchKeyword} onChange={(event) => void searchHistory(event.target.value)} className="w-full bg-transparent text-sm outline-none" placeholder="搜索历史对话" />
+        </label>
+
+        {searchKeyword.trim() ? (
+          <div className="mt-4 grid gap-2">
+            {searchResults.map((item) => (
+              <button key={`${item.session_id}-${item.id}`} onClick={() => void loadMessages(item.session_id)} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-left hover:border-emerald-300">
+                <p className="text-xs font-semibold text-emerald-700">{item.session_title}</p>
+                <p className="mt-1 line-clamp-3 text-sm text-slate-600">{item.content}</p>
+              </button>
+            ))}
+            {!searchResults.length && <p className="text-sm text-slate-500">没有匹配的历史记录。</p>}
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-2">
+            {sessions.map((session) => (
+              <div key={session.id} className={`flex items-start gap-2 rounded-md border p-2 ${activeSessionId === session.id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                <button onClick={() => void loadMessages(session.id)} className="min-w-0 flex-1 text-left">
+                  <p className="truncate text-sm font-medium text-slate-800">{session.title}</p>
+                  <p className="mt-1 text-xs text-slate-500">{session.updated_at ? new Date(session.updated_at).toLocaleString() : '暂无时间'}</p>
+                </button>
+                <button onClick={() => void deleteSession(session.id)} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" title="删除对话">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            {!sessions.length && <p className="text-sm text-slate-500">暂无历史对话。</p>}
+          </div>
+        )}
+      </Panel>
+
+      <Panel>
+        <h3 className="font-semibold">AI 问答</h3>
+        <p className="mt-1 text-sm text-slate-500">当前课程：{course.name}</p>
+        <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
+          {historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">正在加载历史...</div>}
+          {messages.map((message) => (
+            <div key={message.id} className={`rounded-lg p-4 ${message.role === 'user' ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50'}`}>
+              <ReactMarkdown>{message.content}</ReactMarkdown>
+              {message.created_at && <p className="mt-2 text-xs text-slate-400">{new Date(message.created_at).toLocaleString()}</p>}
+            </div>
+          ))}
+          {!messages.length && !historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">选择一个历史对话，或新建对话后开始提问。</div>}
+          {loading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">AI 正在回答...</div>}
+        </div>
+        <div className="mt-4 flex gap-3">
+          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} rows={3} className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" placeholder="输入问题，Enter 发送" />
+          <button onClick={() => void ask()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">
+            <Send size={16} />
+            发送
+          </button>
+        </div>
+      </Panel>
+    </div>
   )
 }
 

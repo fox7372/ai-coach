@@ -1972,6 +1972,35 @@ def list_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | N
     ]
 
 
+@app.get("/qa/messages/search")
+def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    term = keyword.strip()
+    if not term:
+        return []
+    rows = db.execute(
+        select(ChatMessage, ChatSession)
+        .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+        .where(
+            ChatMessage.user_id == user_id,
+            ChatMessage.course_id == course_id,
+            ChatMessage.content.like(f"%{term}%"),
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(50)
+    ).all()
+    return [
+        {
+            "id": message.id,
+            "role": message.role,
+            "content": message.content,
+            "created_at": message.created_at.isoformat() if message.created_at else "",
+            "session_id": session.id,
+            "session_title": session.title,
+        }
+        for message, session in rows
+    ]
+
+
 @app.delete("/qa/messages")
 def delete_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
     if session_id is None:
