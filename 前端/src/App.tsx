@@ -333,7 +333,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       await loadDetail()
       return result
     } catch (error: any) {
-      setNotice(error?.response?.data?.detail || '整体计划修改失败，请稍后再试。')
+      setNotice(error?.code === 'ECONNABORTED' ? 'AI 生成时间较长，请稍后重试。' : error?.response?.data?.detail || '整体计划修改失败，请稍后再试。')
       return null
     } finally {
       setLoading(false)
@@ -587,7 +587,7 @@ function PlanPanel({
         ...withoutPending,
         {
           role: 'assistant',
-          content: result ? '已完成：整体计划已更新，今日计划也已同步调整。' : '修改失败：请检查后端或稍后重试。',
+          content: result ? '已完成：整体计划已更新，今日计划也已同步调整。' : '修改失败：AI 生成可能超时或后端暂时不可用。',
         },
       ]
     })
