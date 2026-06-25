@@ -326,11 +326,15 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
   async function generatePlan(text?: string): Promise<PlanGenerateResult | null> {
     setLoading(true)
     try {
-      const result = (await http.post('/api/ai/generate-learning-plan', { user_id: userId, course_id: activeCourse.id, text })) as unknown as PlanGenerateResult
+      const result = (await http.post('/api/ai/generate-learning-plan', { user_id: userId, course_id: activeCourse.id, text }, { timeout: 300000 })) as unknown as PlanGenerateResult
       setOverallPlan(result.plan)
       if (result.daily_plan) setDailyPlan(result.daily_plan)
       setNotice(text?.trim() ? '已根据你的对话修改整体计划，并同步更新今日计划。' : '学习建议已生成，并同步更新今日计划。')
-      await loadDetail()
+      try {
+        await loadDetail()
+      } catch {
+        // The plan update already succeeded; detail refresh can recover on the next page load.
+      }
       return result
     } catch (error: any) {
       setNotice(error?.code === 'ECONNABORTED' ? 'AI 生成时间较长，请稍后重试。' : error?.response?.data?.detail || '整体计划修改失败，请稍后再试。')
