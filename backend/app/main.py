@@ -1640,7 +1640,14 @@ def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get
     ).all()
     mistake_context = "\n".join(item.ai_analysis or "" for item in mistakes) or "暂无错题记录。"
     plan = ai_service.generate_text(
-        "你是学习规划助手。请基于课程、错题、当前整体计划和学生新的修改意见，更新一份可执行的整体学习计划。输出包含：总体目标、阶段安排、每日节奏、练习方式、错题复盘、如何根据反馈调整。不要只回复修改说明，要返回完整新版计划。",
+        (
+            "你是学习规划助手。请基于课程、错题、当前整体计划和学生新的修改意见，更新一份可执行的整体学习计划。"
+            "不要只回复修改说明，要返回完整新版计划。"
+            "禁止使用 Markdown 大表格或超宽表格。"
+            "请按以下结构输出：一、总体目标；二、阶段安排；三、每周任务；四、实验安排；五、每日节奏；六、检查点与调整规则。"
+            "阶段安排必须使用分周小标题和项目符号，每周包含：目标、理论任务、实验任务、验收标准、时间分配。"
+            "如果有多个模块放在同一周，要拆成同一周下的多个小节，不要塞进一行表格。"
+        ),
         (
             f"课程：{course_name}\n"
             f"当前整体计划：\n{existing.content if existing else '暂无当前整体计划。'}\n\n"

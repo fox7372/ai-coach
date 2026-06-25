@@ -633,7 +633,7 @@ function PlanPanel({
                 <h4 className="text-sm font-semibold text-slate-700">整体计划</h4>
                 <span className="text-xs text-slate-400">目标 / 阶段 / 节奏</span>
               </div>
-              <div className="prose prose-sm mt-2 max-w-none rounded-lg bg-emerald-50 p-4">
+              <div className="markdown-answer mt-2 rounded-lg bg-emerald-50 p-4">
                 <ReactMarkdown>{overallContent || '暂无整体计划。请在右侧输入目标后生成。'}</ReactMarkdown>
               </div>
             </div>
@@ -668,7 +668,7 @@ function PlanPanel({
                 <h4 className="text-sm font-semibold text-slate-700">今日计划</h4>
                 <span className="text-xs text-slate-400">每日反馈后更新</span>
               </div>
-              <div className="prose prose-sm mt-2 max-w-none rounded-lg bg-slate-50 p-4">
+              <div className="markdown-answer mt-2 rounded-lg bg-slate-50 p-4">
                 <ReactMarkdown>{dailyPlan || '暂无今日计划。'}</ReactMarkdown>
               </div>
             </div>
@@ -718,7 +718,7 @@ function PlanPanel({
                   <p className="font-semibold text-slate-800">{item.title}</p>
                   {item.status && <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-500">{item.status}</span>}
                 </div>
-                <div className="prose prose-sm mt-3 max-w-none">
+                <div className="markdown-answer mt-3">
                   <ReactMarkdown>{item.content}</ReactMarkdown>
                 </div>
               </div>
@@ -738,7 +738,7 @@ function QuizPanel({ raw, loading, onGenerate }: { raw: string; loading: boolean
         <h3 className="font-semibold">测验生成</h3>
         <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">生成 5 道题</button>
       </div>
-      <div className="prose prose-sm mt-4 max-w-none rounded-lg bg-slate-50 p-4">
+      <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
         <ReactMarkdown>{raw || '点击生成测验题。后续可以继续接入答题判分。'}</ReactMarkdown>
       </div>
     </Panel>
