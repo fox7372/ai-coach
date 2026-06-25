@@ -873,6 +873,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [message, setMessage] = useState('成功导入资料后才会生成或保留课程。')
   const [lastResource, setLastResource] = useState<Resource | null>(null)
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
+  const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
 
   async function createCourseForResource(name: string, description: string) {
     const existing = courses.find((course) => course.name === name)
@@ -1011,18 +1012,50 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         course_name: finalName,
         learning_goal: learningGoal,
       }, { timeout: 120000 })) as unknown as { summary: string; resources: RecommendedResource[] }
-      await http.post('/courses', {
+      const createdCourse = (await http.post('/courses', {
         user_id: userId,
         name: finalName,
         description: `${learningGoal.trim() || recommendation.summary}\n\nAI 推荐资料：${recommendation.resources.map((item) => item.title).join('；')}`,
-      })
+      })) as unknown as Course
       setRecommendedResources(recommendation.resources)
+      setRecommendedCourseId(createdCourse.id)
       setStatus('success')
       setMessage(`课程已创建：${finalName}。请按下方推荐清单继续上传 PDF、导入网页或视频。`)
       await onCoursesChanged()
     } catch (error: any) {
       setStatus('error')
       setMessage(error?.response?.data?.detail || '无资料课程创建失败，请检查 AI 设置或稍后重试。')
+    }
+  }
+
+  async function addRecommendedResource(item: RecommendedResource, index: number) {
+    if (!recommendedCourseId) {
+      setStatus('error')
+      setMessage('请先用 AI 推荐创建课程，再加入资料。')
+      return
+    }
+    if (!item.url) {
+      setStatus('error')
+      setMessage('这条推荐没有直接网址，不能自动加入课程。请先打开真实资料页面后，在“导入网页资料”中粘贴网址。')
+      return
+    }
+    setStatus('loading')
+    setMessage(`正在加入资料：${item.title}`)
+    try {
+      const resource = (await http.post(`/api/courses/${recommendedCourseId}/resources/webpage`, { url: item.url, priority: 3 })) as unknown as Resource
+      setLastResource(resource)
+      if (resource.status !== 'ready') {
+        setStatus('error')
+        setMessage(resource.error_message || '资料加入失败，请核对网址后重试。')
+        return
+      }
+      setRecommendedResources((items) => items.filter((_, itemIndex) => itemIndex !== index))
+      setStatus('success')
+      setMessage(`已加入课程资料：${resource.title}`)
+      await onCoursesChanged()
+    } catch (error: any) {
+      setStatus('error')
+      setMessage(error?.response?.data?.detail || '资料加入失败，请核对网址后重试。')
     }
   }
 
@@ -1078,9 +1111,14 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                       <span className="text-slate-500">搜索关键词：{item.keyword}</span>
                       {item.url ? (
-                        <a href={item.url} target="_blank" rel="noreferrer" className="rounded-md border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
-                          打开网址
-                        </a>
+                        <>
+                          <a href={item.url} target="_blank" rel="noreferrer" className="rounded-md border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
+                            打开网址
+                          </a>
+                          <button type="button" onClick={() => void addRecommendedResource(item, index)} disabled={status === 'loading'} className="rounded-md bg-emerald-600 px-2 py-1 font-medium text-white hover:bg-emerald-700 disabled:bg-slate-400">
+                            加入课程
+                          </button>
+                        </>
                       ) : (
                         <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-500">暂无直接网址</span>
                       )}
