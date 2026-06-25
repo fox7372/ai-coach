@@ -551,11 +551,20 @@ function PlanPanel({
   onGenerate: (text?: string) => Promise<void>
   onFeedback: (payload: PlanFeedback) => Promise<void>
 }) {
+  const [planView, setPlanView] = useState<'overall' | 'today' | 'create' | 'feedback' | 'history'>('overall')
   const [goalText, setGoalText] = useState('')
   const [feedback, setFeedback] = useState('')
   const [minutes, setMinutes] = useState(30)
   const [status, setStatus] = useState<PlanFeedback['status']>('studying')
   const [difficulty, setDifficulty] = useState<PlanFeedback['difficulty']>('normal')
+  const overallContent = overallPlan || suggestions.find((item) => !item.title.startsWith('每日学习计划'))?.content || ''
+  const planViews: Array<[typeof planView, string]> = [
+    ['overall', '整体计划'],
+    ['today', '今日计划'],
+    ['create', 'AI 共创'],
+    ['feedback', '反馈调整'],
+    ['history', '历史计划'],
+  ]
 
   async function submitOverallPlan() {
     await onGenerate(goalText)
@@ -568,22 +577,41 @@ function PlanPanel({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-      <Panel>
-        <div className="flex items-center justify-between gap-3">
+    <Panel>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
           <h3 className="font-semibold">个性化学习计划</h3>
-          <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">快速生成</button>
+          <p className="mt-1 text-sm text-slate-500">分界面查看和调整计划，避免信息挤在一起。</p>
         </div>
-        <div className="mt-4 grid gap-4">
+        <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">快速生成</button>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+        {planViews.map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setPlanView(key)}
+            className={`rounded-md px-3 py-2 text-sm font-medium ${planView === key ? 'bg-emerald-600 text-white' : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-5">
+        {planView === 'overall' && (
           <div>
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold text-slate-700">整体计划</h4>
               <span className="text-xs text-slate-400">目标 / 阶段 / 节奏</span>
             </div>
             <div className="prose prose-sm mt-2 max-w-none rounded-lg bg-emerald-50 p-4">
-              <ReactMarkdown>{overallPlan || suggestions.find((item) => !item.title.startsWith('每日学习计划'))?.content || '暂无整体计划。请在右侧输入目标后生成。'}</ReactMarkdown>
+              <ReactMarkdown>{overallContent || '暂无整体计划。请进入“AI 共创”输入目标后生成。'}</ReactMarkdown>
             </div>
           </div>
+        )}
+
+        {planView === 'today' && (
           <div>
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold text-slate-700">今日计划</h4>
@@ -593,13 +621,12 @@ function PlanPanel({
               <ReactMarkdown>{dailyPlan || '暂无今日计划。'}</ReactMarkdown>
             </div>
           </div>
-        </div>
-      </Panel>
+        )}
 
-      <div className="grid gap-5">
-        <Panel>
-          <h3 className="font-semibold">和 AI 一起生成整体计划</h3>
-          <p className="mt-1 text-sm text-slate-500">写下你的目标、可用时间、基础水平和希望的节奏，AI 会结合课程、错题和画像重新规划。</p>
+        {planView === 'create' && (
+          <div className="max-w-3xl">
+            <h4 className="font-semibold">和 AI 一起生成整体计划</h4>
+            <p className="mt-1 text-sm text-slate-500">写下你的目标、可用时间、基础水平和希望的节奏，AI 会结合课程、错题和画像重新规划。</p>
           <textarea
             value={goalText}
             onChange={(event) => setGoalText(event.target.value)}
@@ -607,12 +634,14 @@ function PlanPanel({
             className="mt-4 w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
             placeholder="例如：我想两周内学完这一章，每天 40 分钟，基础比较弱，希望先理解概念再做题。"
           />
-          <button onClick={() => void submitOverallPlan()} disabled={loading} className="mt-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据我的目标生成整体计划</button>
-        </Panel>
+            <button onClick={() => void submitOverallPlan()} disabled={loading} className="mt-3 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据我的目标生成整体计划</button>
+          </div>
+        )}
 
-        <Panel>
-          <h3 className="font-semibold">今日学习反馈</h3>
-          <p className="mt-1 text-sm text-slate-500">每天把学习状态告诉 AI，它会更新当天计划，并影响后续学习诊断。</p>
+        {planView === 'feedback' && (
+          <div className="max-w-3xl">
+            <h4 className="font-semibold">今日学习反馈</h4>
+            <p className="mt-1 text-sm text-slate-500">每天把学习状态告诉 AI，它会更新当天计划，并影响后续学习诊断。</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="text-sm text-slate-600">
               状态
@@ -643,10 +672,28 @@ function PlanPanel({
             className="mt-3 w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
             placeholder="例如：今天看完第一节，但矩阵乘法例题还是不会，想明天多练 3 道基础题。"
           />
-          <button onClick={() => void submitFeedback()} disabled={loading || !feedback.trim()} className="mt-3 w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据反馈更新今日计划</button>
-        </Panel>
+            <button onClick={() => void submitFeedback()} disabled={loading || !feedback.trim()} className="mt-3 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据反馈更新今日计划</button>
+          </div>
+        )}
+
+        {planView === 'history' && (
+          <div className="grid gap-3">
+            {suggestions.map((item) => (
+              <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold text-slate-800">{item.title}</p>
+                  {item.status && <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-500">{item.status}</span>}
+                </div>
+                <div className="prose prose-sm mt-3 max-w-none">
+                  <ReactMarkdown>{item.content}</ReactMarkdown>
+                </div>
+              </div>
+            ))}
+            {!suggestions.length && <p className="text-sm text-slate-500">暂无历史计划。</p>}
+          </div>
+        )}
       </div>
-    </div>
+    </Panel>
   )
 }
 
