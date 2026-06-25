@@ -39,6 +39,13 @@ type Resource = {
   chunk_count: number
 }
 
+type RecommendedResource = {
+  title: string
+  resource_type: string
+  reason: string
+  keyword: string
+}
+
 type KnowledgePoint = {
   id: number
   name: string
@@ -857,12 +864,14 @@ function ProfilePanel({ profile }: { profile: Profile | null }) {
 
 function UploadView({ userId, courses, onCoursesChanged }: { userId: number; courses: Course[]; onCoursesChanged: () => Promise<void> }) {
   const [courseName, setCourseName] = useState('')
+  const [learningGoal, setLearningGoal] = useState('')
   const [fileName, setFileName] = useState('')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
   const [message, setMessage] = useState('成功导入资料后才会生成或保留课程。')
   const [lastResource, setLastResource] = useState<Resource | null>(null)
+  const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
 
   async function createCourseForResource(name: string, description: string) {
     const existing = courses.find((course) => course.name === name)
@@ -985,6 +994,37 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
   }
 
+  async function createCourseWithAiResources() {
+    const finalName = courseName.trim()
+    if (!finalName) {
+      setStatus('error')
+      setMessage('请先填写课程名称，再创建无资料课程。')
+      return
+    }
+    setStatus('loading')
+    setMessage('AI 正在生成推荐资料清单...')
+    setRecommendedResources([])
+    try {
+      const recommendation = (await http.post('/api/ai/recommend-course-resources', {
+        user_id: userId,
+        course_name: finalName,
+        learning_goal: learningGoal,
+      }, { timeout: 120000 })) as unknown as { summary: string; resources: RecommendedResource[] }
+      await http.post('/courses', {
+        user_id: userId,
+        name: finalName,
+        description: `${learningGoal.trim() || recommendation.summary}\n\nAI 推荐资料：${recommendation.resources.map((item) => item.title).join('；')}`,
+      })
+      setRecommendedResources(recommendation.resources)
+      setStatus('success')
+      setMessage(`课程已创建：${finalName}。请按下方推荐清单继续上传 PDF、导入网页或视频。`)
+      await onCoursesChanged()
+    } catch (error: any) {
+      setStatus('error')
+      setMessage(error?.response?.data?.detail || '无资料课程创建失败，请检查 AI 设置或稍后重试。')
+    }
+  }
+
   return (
     <div>
       <h2 className="text-xl font-semibold">上传/导入资料</h2>
@@ -995,6 +1035,40 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               课程名称
               <input value={courseName} onChange={(event) => setCourseName(event.target.value)} placeholder="不填则使用资料名称" className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
             </label>
+          </Panel>
+          <Panel>
+            <div className="flex items-center gap-3">
+              <BrainCircuit className="text-emerald-600" />
+              <div>
+                <h3 className="font-semibold">无资料创建课程</h3>
+                <p className="text-sm text-slate-500">先创建课程，AI 罗列建议加入的资料，后续再补充 PDF、网页或视频。</p>
+              </div>
+            </div>
+            <textarea
+              value={learningGoal}
+              onChange={(event) => setLearningGoal(event.target.value)}
+              rows={3}
+              placeholder="学习目标，例如：30 天掌握操作系统基础并完成实验。"
+              className="mt-4 w-full resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+            />
+            <button onClick={() => void createCourseWithAiResources()} disabled={status === 'loading'} className="mt-3 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-400">
+              {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+              AI 推荐并创建课程
+            </button>
+            {recommendedResources.length > 0 && (
+              <div className="mt-4 grid gap-3">
+                {recommendedResources.map((item) => (
+                  <div key={`${item.resource_type}-${item.title}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-slate-800">{item.title}</p>
+                      <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-600">{item.resource_type}</span>
+                    </div>
+                    <p className="mt-2 text-slate-600">{item.reason}</p>
+                    <p className="mt-2 text-xs text-slate-500">搜索关键词：{item.keyword}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">

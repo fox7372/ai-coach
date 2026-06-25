@@ -101,6 +101,25 @@ class CourseCreate(BaseModel):
     description: str | None = None
 
 
+class CourseResourceRecommendRequest(BaseModel):
+    user_id: int = 1
+    course_name: str
+    learning_goal: str | None = None
+
+
+class RecommendedResource(BaseModel):
+    title: str
+    resource_type: str
+    reason: str
+    keyword: str
+
+
+class CourseResourceRecommendResponse(BaseModel):
+    course_name: str
+    summary: str
+    resources: list[RecommendedResource]
+
+
 class AskRequest(BaseModel):
     question: str
     course_id: int = 1
@@ -481,6 +500,60 @@ def parse_knowledge_point_result(result: str) -> list[dict[str, str]]:
         if name and description and is_academic_knowledge_point(name, description):
             items.append({"name": name, "description": description})
     return items
+
+
+def parse_recommended_resources(result: str, course_name: str) -> tuple[str, list[RecommendedResource]]:
+    try:
+        parsed = json.loads(result)
+    except json.JSONDecodeError:
+        parsed = None
+
+    summary = f"已为《{course_name}》生成初步资料清单，建议优先补充教材、课程讲义和练习题。"
+    resources: list[RecommendedResource] = []
+    if isinstance(parsed, dict):
+        summary = str(parsed.get("summary") or summary).strip()
+        raw_items = parsed.get("resources")
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "").strip()
+                resource_type = str(item.get("resource_type") or item.get("type") or "资料").strip()
+                reason = str(item.get("reason") or "").strip()
+                keyword = str(item.get("keyword") or title or course_name).strip()
+                if title and reason:
+                    resources.append(
+                        RecommendedResource(
+                            title=title[:120],
+                            resource_type=resource_type[:30],
+                            reason=reason[:240],
+                            keyword=keyword[:120],
+                        )
+                    )
+    if resources:
+        return summary, resources[:8]
+
+    fallback = [
+        RecommendedResource(
+            title=f"{course_name} 教材或权威讲义",
+            resource_type="教材/讲义",
+            reason="作为课程主线资料，用于建立章节结构和核心概念。",
+            keyword=f"{course_name} 教材 讲义",
+        ),
+        RecommendedResource(
+            title=f"{course_name} 课程主页或公开课",
+            resource_type="网页/视频",
+            reason="补充授课顺序、案例和教师强调的重点。",
+            keyword=f"{course_name} 课程主页 公开课",
+        ),
+        RecommendedResource(
+            title=f"{course_name} 习题与错题训练",
+            resource_type="习题",
+            reason="用于生成测验、发现薄弱点并更新学习计划。",
+            keyword=f"{course_name} 习题 答案 解析",
+        ),
+    ]
+    return summary, fallback
 
 
 def find_knowledge_support(name: str, chunks: list[DocumentChunk], fallback: DocumentChunk | None) -> tuple[DocumentChunk | None, str | None, bool]:
@@ -1016,6 +1089,29 @@ def create_course(payload: CourseCreate, db: Session = Depends(get_db)) -> Cours
         progress=course.progress,
         mastery=course.mastery,
     )
+
+
+@app.post("/api/ai/recommend-course-resources", response_model=CourseResourceRecommendResponse)
+def recommend_course_resources(payload: CourseResourceRecommendRequest) -> CourseResourceRecommendResponse:
+    course_name = payload.course_name.strip()
+    if not course_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="课程名称不能为空")
+
+    result = ai_service.generate_text(
+        (
+            "你是学习资料规划助手。请根据课程名称和学习目标，为学生列出后续应该加入平台的资料。"
+            "不要编造确定存在的下载链接，不要声称平台已经拥有这些资料。"
+            "只输出 JSON，不要 Markdown，不要代码块。"
+            "JSON 格式：{\"summary\":\"一句话说明\",\"resources\":[{\"title\":\"资料名称\",\"resource_type\":\"教材/讲义/视频/网页/习题/项目\",\"reason\":\"为什么需要\",\"keyword\":\"建议搜索关键词\"}]}"
+            "resources 数量 4 到 6 个，名称要具体，适合学生后续上传 PDF、导入网页或视频。"
+        ),
+        (
+            f"课程名称：{course_name}\n"
+            f"学习目标：{payload.learning_goal.strip() if payload.learning_goal else '未填写，请按入门到测验的 MVP 学习场景规划。'}"
+        ),
+    )
+    summary, resources = parse_recommended_resources(result, course_name)
+    return CourseResourceRecommendResponse(course_name=course_name, summary=summary, resources=resources)
 
 
 @app.delete("/courses/{course_id}")
