@@ -83,6 +83,7 @@ function App() {
   const [password, setPassword] = useState('demo123')
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authMessage, setAuthMessage] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
   const [courses, setCourses] = useState<Course[]>([])
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null)
   const [mainView, setMainView] = useState<MainView>('courses')
@@ -108,16 +109,29 @@ function App() {
   async function submitAuth(event: React.FormEvent) {
     event.preventDefault()
     setAuthMessage('')
+    if (!username.trim() || !password.trim()) {
+      setAuthMessage('请输入账号和密码')
+      return
+    }
+    setAuthLoading(true)
     try {
       const result = (await http.post(authMode === 'login' ? '/auth/login' : '/auth/register', {
-        username,
+        username: username.trim(),
         password,
-        nickname: username,
+        nickname: username.trim(),
       })) as unknown as { user: User; message: string }
       setUser(result.user)
       setAuthMessage(result.message)
     } catch (error: any) {
-      setAuthMessage(error?.response?.data?.detail || '登录/注册失败')
+      if (error?.code === 'ERR_NETWORK') {
+        setAuthMessage('后端服务未启动，暂时无法登录或注册')
+      } else if (error?.code === 'ECONNABORTED') {
+        setAuthMessage('后端响应超时，请稍后再试')
+      } else {
+        setAuthMessage(error?.response?.data?.detail || '登录/注册失败')
+      }
+    } finally {
+      setAuthLoading(false)
     }
   }
 
@@ -151,9 +165,9 @@ function App() {
                 密码
                 <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
               </label>
-              {authMessage && <p className="mt-3 text-sm text-slate-600">{authMessage}</p>}
-              <button className="mt-5 w-full rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700">{authMode === 'login' ? '登录' : '注册'}</button>
-              <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-3 w-full rounded-md border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50">
+              {authMessage && <p className={`mt-3 rounded-md px-3 py-2 text-sm ${authMessage.includes('成功') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{authMessage}</p>}
+              <button disabled={authLoading} className="mt-5 w-full rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">{authLoading ? '处理中...' : authMode === 'login' ? '登录' : '注册'}</button>
+              <button type="button" disabled={authLoading} onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-3 w-full rounded-md border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100">
                 {authMode === 'login' ? '注册账号' : '返回登录'}
               </button>
             </form>
