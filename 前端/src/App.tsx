@@ -566,6 +566,7 @@ function PlanPanel({
 
   async function submitOverallPlan() {
     await onGenerate(goalText)
+    setGoalText('')
   }
 
   async function submitFeedback() {
@@ -610,13 +611,13 @@ function PlanPanel({
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <h4 className="font-semibold">和 AI 一起修改整体计划</h4>
-              <p className="mt-1 text-sm text-slate-500">补充目标、可用时间、基础水平和希望的节奏，AI 会重新规划。</p>
+              <p className="mt-1 text-sm text-slate-500">写下想调整的地方，AI 会参考左侧当前计划生成完整新版计划。</p>
               <textarea
                 value={goalText}
                 onChange={(event) => setGoalText(event.target.value)}
                 rows={7}
                 className="mt-4 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500"
-                placeholder="例如：我想两周内学完这一章，每天 40 分钟，基础比较弱，希望先理解概念再做题。"
+                placeholder="例如：把计划压缩到 7 天；每天最多 40 分钟；先做实验再看理论；增加系统调用练习。"
               />
               <button onClick={() => void submitOverallPlan()} disabled={loading} className="mt-3 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据我的目标更新整体计划</button>
             </div>

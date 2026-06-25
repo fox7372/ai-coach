@@ -1623,6 +1623,15 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
 @app.post("/api/ai/generate-learning-plan")
 def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     course_name = get_course_name(db, payload.course_id)
+    existing = db.scalar(
+        select(LearningSuggestion)
+        .where(
+            LearningSuggestion.user_id == payload.user_id,
+            LearningSuggestion.course_id == payload.course_id,
+            LearningSuggestion.title.in_(["整体学习计划", "下一步学习建议"]),
+        )
+        .order_by(LearningSuggestion.id.desc())
+    )
     mistakes = db.scalars(
         select(MistakeRecord)
         .where(MistakeRecord.user_id == payload.user_id, MistakeRecord.course_id == payload.course_id)
@@ -1631,16 +1640,28 @@ def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get
     ).all()
     mistake_context = "\n".join(item.ai_analysis or "" for item in mistakes) or "暂无错题记录。"
     plan = ai_service.generate_text(
-        "你是学习规划助手。请基于课程、错题和学生主动提供的目标，生成可执行的整体学习计划。输出包含：总体目标、阶段安排、每日节奏、练习方式、错题复盘、如何根据反馈调整。",
-        f"课程：{course_name}\n学生目标与约束：{payload.text or '学生暂未补充目标，请给出默认 MVP 学习计划。'}\n最近错题：\n{mistake_context}",
+        "你是学习规划助手。请基于课程、错题、当前整体计划和学生新的修改意见，更新一份可执行的整体学习计划。输出包含：总体目标、阶段安排、每日节奏、练习方式、错题复盘、如何根据反馈调整。不要只回复修改说明，要返回完整新版计划。",
+        (
+            f"课程：{course_name}\n"
+            f"当前整体计划：\n{existing.content if existing else '暂无当前整体计划。'}\n\n"
+            f"学生修改意见或目标约束：{payload.text or '学生暂未补充目标，请给出默认 MVP 学习计划。'}\n"
+            f"最近错题：\n{mistake_context}"
+        ),
     )
-    suggestion = LearningSuggestion(
-        user_id=payload.user_id,
-        course_id=payload.course_id,
-        title="下一步学习建议",
-        content=plan,
-    )
-    db.add(suggestion)
+    if existing is not None:
+        existing.title = "整体学习计划"
+        existing.content = plan
+        existing.status = "updated"
+        suggestion = existing
+    else:
+        suggestion = LearningSuggestion(
+            user_id=payload.user_id,
+            course_id=payload.course_id,
+            title="整体学习计划",
+            content=plan,
+            status="active",
+        )
+        db.add(suggestion)
     db.commit()
     db.refresh(suggestion)
     return {"suggestion_id": suggestion.id, "plan": plan}
