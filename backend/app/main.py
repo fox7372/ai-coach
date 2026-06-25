@@ -112,6 +112,7 @@ class RecommendedResource(BaseModel):
     resource_type: str
     reason: str
     keyword: str
+    url: str
 
 
 class CourseResourceRecommendResponse(BaseModel):
@@ -521,6 +522,9 @@ def parse_recommended_resources(result: str, course_name: str) -> tuple[str, lis
                 resource_type = str(item.get("resource_type") or item.get("type") or "资料").strip()
                 reason = str(item.get("reason") or "").strip()
                 keyword = str(item.get("keyword") or title or course_name).strip()
+                url = str(item.get("url") or "").strip()
+                if not url.startswith(("http://", "https://")):
+                    url = f"https://www.bing.com/search?{urlencode({'q': keyword})}"
                 if title and reason:
                     resources.append(
                         RecommendedResource(
@@ -528,6 +532,7 @@ def parse_recommended_resources(result: str, course_name: str) -> tuple[str, lis
                             resource_type=resource_type[:30],
                             reason=reason[:240],
                             keyword=keyword[:120],
+                            url=url[:500],
                         )
                     )
     if resources:
@@ -539,18 +544,21 @@ def parse_recommended_resources(result: str, course_name: str) -> tuple[str, lis
             resource_type="教材/讲义",
             reason="作为课程主线资料，用于建立章节结构和核心概念。",
             keyword=f"{course_name} 教材 讲义",
+            url=f"https://www.bing.com/search?{urlencode({'q': f'{course_name} 教材 讲义'})}",
         ),
         RecommendedResource(
             title=f"{course_name} 课程主页或公开课",
             resource_type="网页/视频",
             reason="补充授课顺序、案例和教师强调的重点。",
             keyword=f"{course_name} 课程主页 公开课",
+            url=f"https://www.bing.com/search?{urlencode({'q': f'{course_name} 课程主页 公开课'})}",
         ),
         RecommendedResource(
             title=f"{course_name} 习题与错题训练",
             resource_type="习题",
             reason="用于生成测验、发现薄弱点并更新学习计划。",
             keyword=f"{course_name} 习题 答案 解析",
+            url=f"https://www.bing.com/search?{urlencode({'q': f'{course_name} 习题 答案 解析'})}",
         ),
     ]
     return summary, fallback
@@ -1101,8 +1109,9 @@ def recommend_course_resources(payload: CourseResourceRecommendRequest) -> Cours
         (
             "你是学习资料规划助手。请根据课程名称和学习目标，为学生列出后续应该加入平台的资料。"
             "不要编造确定存在的下载链接，不要声称平台已经拥有这些资料。"
+            "如果能确定官网、课程主页或公开课页面，可以给 url；不确定就留空 url。"
             "只输出 JSON，不要 Markdown，不要代码块。"
-            "JSON 格式：{\"summary\":\"一句话说明\",\"resources\":[{\"title\":\"资料名称\",\"resource_type\":\"教材/讲义/视频/网页/习题/项目\",\"reason\":\"为什么需要\",\"keyword\":\"建议搜索关键词\"}]}"
+            "JSON 格式：{\"summary\":\"一句话说明\",\"resources\":[{\"title\":\"资料名称\",\"resource_type\":\"教材/讲义/视频/网页/习题/项目\",\"reason\":\"为什么需要\",\"keyword\":\"建议搜索关键词\",\"url\":\"可核对网址或空字符串\"}]}"
             "resources 数量 4 到 6 个，名称要具体，适合学生后续上传 PDF、导入网页或视频。"
         ),
         (

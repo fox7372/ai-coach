@@ -44,6 +44,7 @@ type RecommendedResource = {
   resource_type: string
   reason: string
   keyword: string
+  url: string
 }
 
 type KnowledgePoint = {
@@ -1057,14 +1058,29 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
             </button>
             {recommendedResources.length > 0 && (
               <div className="mt-4 grid gap-3">
-                {recommendedResources.map((item) => (
+                {recommendedResources.map((item, index) => (
                   <div key={`${item.resource_type}-${item.title}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="font-semibold text-slate-800">{item.title}</p>
-                      <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-600">{item.resource_type}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-600">{item.resource_type}</span>
+                        <button
+                          type="button"
+                          onClick={() => setRecommendedResources((items) => items.filter((_, itemIndex) => itemIndex !== index))}
+                          className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-red-600"
+                          title="删除这条推荐"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </div>
                     <p className="mt-2 text-slate-600">{item.reason}</p>
-                    <p className="mt-2 text-xs text-slate-500">搜索关键词：{item.keyword}</p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-slate-500">搜索关键词：{item.keyword}</span>
+                      <a href={item.url} target="_blank" rel="noreferrer" className="rounded-md border border-emerald-200 bg-white px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-50">
+                        打开网址
+                      </a>
+                    </div>
                   </div>
                 ))}
               </div>
