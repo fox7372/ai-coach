@@ -62,6 +62,7 @@ type Profile = { radar: Array<{ name: string; value: number }>; conclusion: stri
 type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string; created_at?: string }
 type ChatSession = { id: number; title: string; course_id: number; created_at: string; updated_at: string }
 type ChatSearchResult = ChatMessage & { session_id: number; session_title: string }
+type PlanGenerateResult = { plan: string; daily_plan?: string }
 type PlanFeedback = {
   status: 'not_started' | 'studying' | 'completed' | 'stuck'
   minutes: number
@@ -322,13 +323,18 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     }
   }
 
-  async function generatePlan(text?: string) {
+  async function generatePlan(text?: string): Promise<PlanGenerateResult | null> {
     setLoading(true)
     try {
-      const result = (await http.post('/api/ai/generate-learning-plan', { user_id: userId, course_id: activeCourse.id, text })) as unknown as { plan: string }
+      const result = (await http.post('/api/ai/generate-learning-plan', { user_id: userId, course_id: activeCourse.id, text })) as unknown as PlanGenerateResult
       setOverallPlan(result.plan)
-      setNotice(text?.trim() ? '已根据你的目标生成整体学习计划。' : '学习建议已生成。')
+      if (result.daily_plan) setDailyPlan(result.daily_plan)
+      setNotice(text?.trim() ? '已根据你的对话修改整体计划，并同步更新今日计划。' : '学习建议已生成，并同步更新今日计划。')
       await loadDetail()
+      return result
+    } catch (error: any) {
+      setNotice(error?.response?.data?.detail || '整体计划修改失败，请稍后再试。')
+      return null
     } finally {
       setLoading(false)
     }
@@ -548,11 +554,13 @@ function PlanPanel({
   dailyPlan: string
   suggestions: Suggestion[]
   loading: boolean
-  onGenerate: (text?: string) => Promise<void>
+  onGenerate: (text?: string) => Promise<PlanGenerateResult | null>
   onFeedback: (payload: PlanFeedback) => Promise<void>
 }) {
   const [planView, setPlanView] = useState<'overall' | 'today' | 'history'>('overall')
   const [goalText, setGoalText] = useState('')
+  const [planDialog, setPlanDialog] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([])
+  const [planEditing, setPlanEditing] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [minutes, setMinutes] = useState(30)
   const [status, setStatus] = useState<PlanFeedback['status']>('studying')
@@ -565,8 +573,24 @@ function PlanPanel({
   ]
 
   async function submitOverallPlan() {
-    await onGenerate(goalText)
+    if (!goalText.trim() || planEditing) return
+    const instruction = goalText.trim()
     setGoalText('')
+    setPlanDialog((items) => [...items, { role: 'user', content: instruction }])
+    setPlanEditing(true)
+    setPlanDialog((items) => [...items, { role: 'assistant', content: '正在根据这条对话修改整体计划，并同步重写今日计划...' }])
+    const result = await onGenerate(instruction)
+    setPlanEditing(false)
+    setPlanDialog((items) => {
+      const withoutPending = items.filter((item) => item.content !== '正在根据这条对话修改整体计划，并同步重写今日计划...')
+      return [
+        ...withoutPending,
+        {
+          role: 'assistant',
+          content: result ? '已完成：整体计划已更新，今日计划也已同步调整。' : '修改失败：请检查后端或稍后重试。',
+        },
+      ]
+    })
   }
 
   async function submitFeedback() {
@@ -612,14 +636,23 @@ function PlanPanel({
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <h4 className="font-semibold">和 AI 一起修改整体计划</h4>
               <p className="mt-1 text-sm text-slate-500">写下想调整的地方，AI 会参考左侧当前计划生成完整新版计划。</p>
+              <div className="mt-4 grid max-h-44 gap-2 overflow-y-auto">
+                {planDialog.map((item, index) => (
+                  <div key={index} className={`rounded-md px-3 py-2 text-sm ${item.role === 'user' ? 'bg-emerald-100 text-emerald-900' : 'bg-white text-slate-600'}`}>
+                    {item.content}
+                  </div>
+                ))}
+                {!planDialog.length && <p className="rounded-md bg-white px-3 py-2 text-sm text-slate-500">可以像聊天一样输入修改意见，例如“压缩到 7 天”或“每天只安排 30 分钟”。</p>}
+              </div>
               <textarea
                 value={goalText}
                 onChange={(event) => setGoalText(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submitOverallPlan() } }}
                 rows={7}
                 className="mt-4 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500"
                 placeholder="例如：把计划压缩到 7 天；每天最多 40 分钟；先做实验再看理论；增加系统调用练习。"
               />
-              <button onClick={() => void submitOverallPlan()} disabled={loading} className="mt-3 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">根据我的目标更新整体计划</button>
+              <button onClick={() => void submitOverallPlan()} disabled={loading || planEditing || !goalText.trim()} className="mt-3 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{planEditing ? '正在同步...' : '发送修改并同步今日计划'}</button>
             </div>
           </div>
         )}

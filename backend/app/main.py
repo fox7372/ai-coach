@@ -1662,9 +1662,19 @@ def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get
             status="active",
         )
         db.add(suggestion)
+    db.flush()
+    study_date = date.today().isoformat()
+    daily = build_daily_plan(
+        db,
+        payload.user_id,
+        payload.course_id,
+        study_date,
+        f"整体学习计划已根据这条修改意见更新：{payload.text or '快速生成默认整体计划'}。请同步调整今日计划，使它服务于新版整体计划。",
+    )
     db.commit()
     db.refresh(suggestion)
-    return {"suggestion_id": suggestion.id, "plan": plan}
+    db.refresh(daily)
+    return {"suggestion_id": suggestion.id, "plan": plan, "daily_plan": daily.content, "daily_suggestion_id": daily.id}
 
 
 def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str, feedback: str | None = None) -> LearningSuggestion:
@@ -1683,11 +1693,21 @@ def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str,
     ).all()
     mistake_context = "\n".join(item.ai_analysis or "" for item in mistakes) or "暂无错题记录。"
     checkin_context = "\n".join(f"{item.study_date} {item.status} {item.minutes}分钟 {item.difficulty}：{item.feedback}" for item in checkins) or "暂无学习状态反馈。"
+    overall = db.scalar(
+        select(LearningSuggestion)
+        .where(
+            LearningSuggestion.user_id == user_id,
+            LearningSuggestion.course_id == course_id,
+            LearningSuggestion.title == "整体学习计划",
+        )
+        .order_by(LearningSuggestion.id.desc())
+    )
     extra_feedback = feedback or "今天还没有新的反馈。"
     plan = ai_service.generate_text(
-        "你是每日学习计划助手。请基于学生最新状态生成今天的学习计划。输出包含：今日目标、学习任务、练习任务、复盘提醒、明日调整依据。",
+        "你是每日学习计划助手。请基于整体学习计划和学生最新状态生成今天的学习计划。今日计划必须服务于整体计划。输出包含：今日目标、学习任务、练习任务、复盘提醒、明日调整依据。",
         (
             f"日期：{study_date}\n课程：{course_name}\n"
+            f"当前整体学习计划：\n{overall.content if overall else '暂无整体学习计划。'}\n\n"
             f"最新反馈：{extra_feedback}\n最近学习状态：\n{checkin_context}\n最近错题：\n{mistake_context}"
         ),
     )
