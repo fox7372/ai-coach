@@ -77,6 +77,18 @@ type QuizQuestion = {
   correct_answer: string
   explanation: string
 }
+type QuizAnswerRecord = {
+  id: number
+  question_id: number
+  question: string
+  student_answer: string | null
+  is_correct: boolean
+  score: number
+  ai_feedback: string | null
+  correct_answer: string | null
+  explanation: string | null
+  answered_at: string
+}
 type PlanFeedback = {
   status: 'not_started' | 'studying' | 'completed' | 'stuck'
   minutes: number
@@ -334,13 +346,14 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
   const [overallPlan, setOverallPlan] = useState('')
   const [quizRaw, setQuizRaw] = useState('')
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
+  const [quizAnswerRecords, setQuizAnswerRecords] = useState<QuizAnswerRecord[]>([])
   const [manualMistake, setManualMistake] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
 
   async function loadDetail() {
     if (!course) return
-    const [resourceResult, pointResult, suggestionResult, mistakeResult, diagnosisResult, profileResult, dailyResult] = await Promise.all([
+    const [resourceResult, pointResult, suggestionResult, mistakeResult, diagnosisResult, profileResult, dailyResult, answerResult] = await Promise.all([
       http.get(`/api/courses/${course.id}/resources`),
       http.get(`/courses/${course.id}/knowledge-points`),
       http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`),
@@ -348,6 +361,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`),
       http.get(`/courses/${course.id}/profile?user_id=${userId}`),
       http.post('/api/ai/daily-learning-plan', { user_id: userId, course_id: course.id }),
+      http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`),
     ])
     setResources(resourceResult as unknown as Resource[])
     setKnowledge(pointResult as unknown as KnowledgePoint[])
@@ -358,6 +372,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     setDiagnosis(diagnosisResult as unknown as Diagnosis)
     setProfile(profileResult as unknown as Profile)
     setDailyPlan((dailyResult as unknown as { plan: string }).plan)
+    setQuizAnswerRecords(answerResult as unknown as QuizAnswerRecord[])
   }
 
   useEffect(() => {
@@ -372,6 +387,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     setOverallPlan('')
     setQuizRaw('')
     setQuizQuestions([])
+    setQuizAnswerRecords([])
     setManualMistake('')
     void loadDetail()
   }, [course?.id])
@@ -501,7 +517,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
         {tab === 'qa' && <QaView course={activeCourse} userId={userId} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
         {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
-        {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} loading={loading} onGenerate={generateQuiz} onMistakeSaved={loadDetail} />}
+        {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} answerRecords={quizAnswerRecords} loading={loading} onGenerate={generateQuiz} onAnswered={loadDetail} onMistakeSaved={loadDetail} />}
         {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}
         {tab === 'profile' && <ProfilePanel profile={profile} />}
@@ -814,8 +830,10 @@ function QuizPanel({
   courseName,
   raw,
   questions,
+  answerRecords,
   loading,
   onGenerate,
+  onAnswered,
   onMistakeSaved,
 }: {
   courseId: number
@@ -823,8 +841,10 @@ function QuizPanel({
   courseName: string
   raw: string
   questions: QuizQuestion[]
+  answerRecords: QuizAnswerRecord[]
   loading: boolean
   onGenerate: (text?: string) => Promise<void>
+  onAnswered: () => Promise<void>
   onMistakeSaved: () => Promise<void>
 }) {
   const [quizFocus, setQuizFocus] = useState('')
@@ -851,8 +871,9 @@ function QuizPanel({
         course_id: courseId,
         question_id: question.id,
         student_answer: answer,
-      })) as unknown as { analysis: string }
+      })) as unknown as { analysis: string; answer_record_id: number }
       setEvaluations((items) => ({ ...items, [question.id]: result.analysis }))
+      await onAnswered()
     } finally {
       setBusyQuestionId(null)
     }
@@ -966,6 +987,29 @@ function QuizPanel({
           ))}
         </div>
       )}
+      <div className="mt-6 border-t border-slate-200 pt-5">
+        <h4 className="font-semibold text-slate-900">已保存的作答记录</h4>
+        <div className="mt-3 grid gap-3">
+          {answerRecords.map((record) => (
+            <div key={record.id} className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-slate-900">{record.question}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">我的答案：{record.student_answer || '未填写'}</p>
+                </div>
+                <span className={`rounded-lg px-2 py-1 text-xs font-medium ${record.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>得分 {record.score}</span>
+              </div>
+              {record.ai_feedback && (
+                <div className="markdown-answer mt-3 rounded-lg bg-slate-50 p-3">
+                  <ReactMarkdown>{record.ai_feedback}</ReactMarkdown>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-slate-400">{record.answered_at ? new Date(record.answered_at).toLocaleString() : '暂无时间'}</p>
+            </div>
+          ))}
+          {!answerRecords.length && <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">暂无已保存作答。练习模式提交 AI 判断后会自动保存。</p>}
+        </div>
+      </div>
     </Panel>
   )
 }

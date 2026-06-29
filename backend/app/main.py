@@ -949,6 +949,9 @@ def ensure_resource_schema() -> None:
             "source_excerpt": "TEXT NULL",
             "confidence": "INT NOT NULL DEFAULT 50",
         },
+        "answer_records": {
+            "ai_feedback": "TEXT NULL",
+        },
     }
     with engine.begin() as connection:
         for table_name, columns_to_add in table_columns.items():
@@ -1842,6 +1845,12 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
     expected = (question.correct_answer or "").strip()
     actual = payload.student_answer.strip()
     is_correct = bool(expected and actual == expected)
+    analysis = ""
+    if not is_correct:
+        analysis = ai_service.generate_text(
+            "你是错题分析助手。请分析学生为什么错，并给出复习建议。",
+            f"题目：{question.content}\n学生答案：{payload.student_answer}\n参考答案：{question.correct_answer}\n解析：{question.explanation}",
+        )
     answer_record = AnswerRecord(
         user_id=payload.user_id,
         course_id=payload.course_id,
@@ -1849,6 +1858,7 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
         student_answer=payload.student_answer,
         is_correct=is_correct,
         score=100 if is_correct else 0,
+        ai_feedback=analysis,
     )
     db.add(answer_record)
     course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
@@ -1858,12 +1868,7 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
     db.flush()
 
     mistake = None
-    analysis = ""
     if not is_correct:
-        analysis = ai_service.generate_text(
-            "你是错题分析助手。请分析学生为什么错，并给出复习建议。",
-            f"题目：{question.content}\n学生答案：{payload.student_answer}\n参考答案：{question.correct_answer}\n解析：{question.explanation}",
-        )
         mistake = MistakeRecord(
             user_id=payload.user_id,
             course_id=payload.course_id,
@@ -1915,6 +1920,7 @@ def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_d
         student_answer=payload.student_answer,
         is_correct=is_exact,
         score=100 if is_exact else 60,
+        ai_feedback=result,
     )
     db.add(answer_record)
     course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
@@ -1929,6 +1935,30 @@ def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_d
         "score": answer_record.score,
         "analysis": result,
     }
+
+
+@app.get("/api/quiz/answer-records")
+def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    query = select(AnswerRecord, Question).join(Question, AnswerRecord.question_id == Question.id).where(AnswerRecord.user_id == user_id)
+    if course_id is not None:
+        query = query.where(AnswerRecord.course_id == course_id)
+    rows = db.execute(query.order_by(AnswerRecord.id.desc()).limit(50)).all()
+    return [
+        {
+            "id": answer.id,
+            "course_id": answer.course_id,
+            "question_id": answer.question_id,
+            "question": question.content,
+            "student_answer": answer.student_answer,
+            "is_correct": answer.is_correct,
+            "score": answer.score,
+            "ai_feedback": answer.ai_feedback,
+            "correct_answer": question.correct_answer,
+            "explanation": question.explanation,
+            "answered_at": answer.answered_at,
+        }
+        for answer, question in rows
+    ]
 
 
 @app.post("/api/ai/generate-learning-plan")
