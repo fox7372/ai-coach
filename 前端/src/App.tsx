@@ -71,6 +71,12 @@ type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: s
 type ChatSession = { id: number; title: string; course_id: number; created_at: string; updated_at: string }
 type ChatSearchResult = ChatMessage & { session_id: number; session_title: string }
 type PlanGenerateResult = { plan: string; daily_plan?: string }
+type QuizQuestion = {
+  id: number
+  content: string
+  correct_answer: string
+  explanation: string
+}
 type PlanFeedback = {
   status: 'not_started' | 'studying' | 'completed' | 'stuck'
   minutes: number
@@ -327,6 +333,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
   const [dailyPlan, setDailyPlan] = useState('')
   const [overallPlan, setOverallPlan] = useState('')
   const [quizRaw, setQuizRaw] = useState('')
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
   const [manualMistake, setManualMistake] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
@@ -364,6 +371,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     setDailyPlan('')
     setOverallPlan('')
     setQuizRaw('')
+    setQuizQuestions([])
     setManualMistake('')
     void loadDetail()
   }, [course?.id])
@@ -422,8 +430,9 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
   async function generateQuiz(text?: string) {
     setLoading(true)
     try {
-      const result = (await http.post('/api/ai/generate-quiz', { user_id: userId, course_id: activeCourse.id, count: 5, text })) as unknown as { raw: string }
+      const result = (await http.post('/api/ai/generate-quiz', { user_id: userId, course_id: activeCourse.id, count: 5, text })) as unknown as { raw: string; questions: QuizQuestion[] }
       setQuizRaw(result.raw)
+      setQuizQuestions(result.questions || [])
       setNotice('测验题已生成。')
     } finally {
       setLoading(false)
@@ -492,7 +501,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
         {tab === 'qa' && <QaView course={activeCourse} userId={userId} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
         {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
-        {tab === 'quiz' && <QuizPanel courseName={activeCourse.name} raw={quizRaw} loading={loading} onGenerate={generateQuiz} />}
+        {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} loading={loading} onGenerate={generateQuiz} onMistakeSaved={loadDetail} />}
         {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}
         {tab === 'profile' && <ProfilePanel profile={profile} />}
@@ -799,21 +808,93 @@ function PlanPanel({
   )
 }
 
-function QuizPanel({ courseName, raw, loading, onGenerate }: { courseName: string; raw: string; loading: boolean; onGenerate: (text?: string) => Promise<void> }) {
+function QuizPanel({
+  courseId,
+  userId,
+  courseName,
+  raw,
+  questions,
+  loading,
+  onGenerate,
+  onMistakeSaved,
+}: {
+  courseId: number
+  userId: number
+  courseName: string
+  raw: string
+  questions: QuizQuestion[]
+  loading: boolean
+  onGenerate: (text?: string) => Promise<void>
+  onMistakeSaved: () => Promise<void>
+}) {
   const [quizFocus, setQuizFocus] = useState('')
+  const [mode, setMode] = useState<'answer' | 'practice'>('answer')
+  const [answers, setAnswers] = useState<Record<number, string>>({})
+  const [evaluations, setEvaluations] = useState<Record<number, string>>({})
+  const [busyQuestionId, setBusyQuestionId] = useState<number | null>(null)
+  const [savedMistakes, setSavedMistakes] = useState<Record<number, boolean>>({})
 
   async function submitQuiz(text?: string) {
     await onGenerate(text ?? quizFocus)
+    setAnswers({})
+    setEvaluations({})
+    setSavedMistakes({})
+  }
+
+  async function evaluateAnswer(question: QuizQuestion) {
+    const answer = answers[question.id]?.trim()
+    if (!answer) return
+    setBusyQuestionId(question.id)
+    try {
+      const result = (await http.post('/api/quiz/evaluate-answer', {
+        user_id: userId,
+        course_id: courseId,
+        question_id: question.id,
+        student_answer: answer,
+      })) as unknown as { analysis: string }
+      setEvaluations((items) => ({ ...items, [question.id]: result.analysis }))
+    } finally {
+      setBusyQuestionId(null)
+    }
+  }
+
+  async function addToMistakeBook(question: QuizQuestion, reason?: string) {
+    setBusyQuestionId(question.id)
+    try {
+      await http.post('/mistakes', {
+        user_id: userId,
+        course_id: courseId,
+        question_id: question.id,
+        mistake_type: mode === 'practice' ? 'quiz_practice' : 'quiz_review',
+        ai_analysis: [
+          `题目：${question.content}`,
+          answers[question.id]?.trim() ? `我的答案：${answers[question.id].trim()}` : '',
+          `参考答案：${question.correct_answer || '未提供'}`,
+          `解析：${question.explanation || '未提供'}`,
+          reason ? `AI 判定：${reason}` : '',
+        ].filter(Boolean).join('\n\n'),
+        weak_points: '测验中标记的薄弱点',
+        suggestion: '加入错题本后复习对应知识点，并重新完成同类题。',
+      })
+      setSavedMistakes((items) => ({ ...items, [question.id]: true }))
+      await onMistakeSaved()
+    } finally {
+      setBusyQuestionId(null)
+    }
   }
 
   return (
     <Panel>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="font-semibold">测验生成</h3>
           <p className="mt-1 text-sm text-slate-500">当前课程：{courseName}。默认按今日学习计划检测，也可以指定检测范围。</p>
         </div>
         <button onClick={() => void submitQuiz('按今日学习计划检测当前学习内容')} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}检测今日内容</button>
+      </div>
+      <div className="mt-4 inline-flex rounded-xl border border-slate-200 bg-white p-1 text-sm">
+        <button onClick={() => setMode('answer')} className={`rounded-lg px-3 py-2 font-medium ${mode === 'answer' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>答案模式</button>
+        <button onClick={() => setMode('practice')} className={`rounded-lg px-3 py-2 font-medium ${mode === 'practice' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>练习模式</button>
       </div>
       {loading && <div className="mt-4"><LoadingNotice text="AI 正在根据检测范围生成测试题..." /></div>}
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -833,9 +914,58 @@ function QuizPanel({ courseName, raw, loading, onGenerate }: { courseName: strin
           <button onClick={() => { setQuizFocus('检测最近错题暴露的薄弱点'); void submitQuiz('检测最近错题暴露的薄弱点') }} disabled={loading} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-white disabled:text-slate-400">薄弱点</button>
         </div>
       </div>
-      <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
-        <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
-      </div>
+      {!questions.length && (
+        <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
+          <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
+        </div>
+      )}
+      {!!questions.length && (
+        <div className="mt-4 grid gap-4">
+          {questions.map((question, index) => (
+            <div key={question.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-emerald-700">第 {index + 1} 题</p>
+                  <p className="mt-2 whitespace-pre-wrap font-medium text-slate-900">{question.content}</p>
+                </div>
+                <button onClick={() => void addToMistakeBook(question)} disabled={busyQuestionId === question.id || savedMistakes[question.id]} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400">
+                  {savedMistakes[question.id] ? '已加入错题本' : '加入错题本'}
+                </button>
+              </div>
+
+              {mode === 'answer' ? (
+                <div className="markdown-answer mt-4 rounded-lg bg-white p-4">
+                  <ReactMarkdown>{`**参考答案**\n\n${question.correct_answer || '暂无参考答案'}\n\n**解析**\n\n${question.explanation || '暂无解析'}`}</ReactMarkdown>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <textarea
+                    value={answers[question.id] || ''}
+                    onChange={(event) => setAnswers((items) => ({ ...items, [question.id]: event.target.value }))}
+                    rows={4}
+                    className="input-surface w-full resize-none px-3 py-2.5 text-sm outline-none"
+                    placeholder="在这里写下你的答案，提交后 AI 会判断并给出建议。"
+                  />
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button onClick={() => void evaluateAnswer(question)} disabled={busyQuestionId === question.id || !answers[question.id]?.trim()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">
+                      {busyQuestionId === question.id && <Loader2 className="animate-spin" size={16} />}
+                      AI 判断
+                    </button>
+                    <button onClick={() => void addToMistakeBook(question, evaluations[question.id])} disabled={busyQuestionId === question.id || savedMistakes[question.id]} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400">
+                      {savedMistakes[question.id] ? '已加入错题本' : '加入错题本'}
+                    </button>
+                  </div>
+                  {evaluations[question.id] && (
+                    <div className="markdown-answer mt-3 rounded-lg bg-white p-4">
+                      <ReactMarkdown>{evaluations[question.id]}</ReactMarkdown>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </Panel>
   )
 }

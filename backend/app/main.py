@@ -1886,6 +1886,51 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
     }
 
 
+@app.post("/api/quiz/evaluate-answer")
+def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    question = db.scalar(select(Question).where(Question.id == payload.question_id, Question.course_id == payload.course_id))
+    if question is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题目不存在")
+
+    result = ai_service.generate_text(
+        (
+            "你是课程测验判题助手。请根据题目、学生答案、参考答案和解析判断学生回答质量。"
+            "不要自动加入错题本，只输出给学生看的判定和建议。"
+            "请用简体中文，格式为 Markdown，包含：判定、得分建议、问题分析、下一步复习建议。"
+        ),
+        (
+            f"题目：{question.content}\n"
+            f"学生答案：{payload.student_answer}\n"
+            f"参考答案：{question.correct_answer or '未提供'}\n"
+            f"解析：{question.explanation or '未提供'}"
+        ),
+    )
+    expected = (question.correct_answer or "").strip()
+    actual = payload.student_answer.strip()
+    is_exact = bool(expected and actual == expected)
+    answer_record = AnswerRecord(
+        user_id=payload.user_id,
+        course_id=payload.course_id,
+        question_id=payload.question_id,
+        student_answer=payload.student_answer,
+        is_correct=is_exact,
+        score=100 if is_exact else 60,
+    )
+    db.add(answer_record)
+    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
+    if course is not None:
+        course.mastery = max(0, min(100, course.mastery + (2 if is_exact else 0)))
+        course.progress = max(course.progress, 10)
+    db.commit()
+    db.refresh(answer_record)
+    return {
+        "answer_record_id": answer_record.id,
+        "is_exact": is_exact,
+        "score": answer_record.score,
+        "analysis": result,
+    }
+
+
 @app.post("/api/ai/generate-learning-plan")
 def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     course_name = get_course_name(db, payload.course_id)
