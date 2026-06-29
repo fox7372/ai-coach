@@ -475,6 +475,17 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
     }
   }
 
+  async function deleteMistake(mistakeId: number) {
+    setLoading(true)
+    try {
+      await http.delete(`/mistakes/${mistakeId}?user_id=${userId}`)
+      setNotice('错题已删除。')
+      await loadDetail()
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const tabs: Array<[DetailTab, string]> = [
     ['overview', '概览'],
     ['resources', '资料'],
@@ -518,7 +529,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
         {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
         {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} answerRecords={quizAnswerRecords} loading={loading} onGenerate={generateQuiz} onAnswered={loadDetail} onMistakeSaved={loadDetail} />}
-        {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} loading={loading} />}
+        {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} onDelete={deleteMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}
         {tab === 'profile' && <ProfilePanel profile={profile} />}
       </div>
@@ -1014,7 +1025,7 @@ function QuizPanel({
   )
 }
 
-function MistakesPanel({ mistakes, value, onChange, onSave, loading }: { mistakes: Mistake[]; value: string; onChange: (value: string) => void; onSave: () => Promise<void>; loading: boolean }) {
+function MistakesPanel({ mistakes, value, onChange, onSave, onDelete, loading }: { mistakes: Mistake[]; value: string; onChange: (value: string) => void; onSave: () => Promise<void>; onDelete: (mistakeId: number) => Promise<void>; loading: boolean }) {
   return (
     <Panel>
       <h3 className="font-semibold">错题库</h3>
@@ -1025,7 +1036,12 @@ function MistakesPanel({ mistakes, value, onChange, onSave, loading }: { mistake
       <div className="mt-4 grid gap-3">
         {mistakes.map((item) => (
           <div key={item.id} className="rounded-lg border border-red-100 bg-red-50 p-4">
-            <p className="font-semibold text-red-700">{item.mistake_type || '错题记录'} · {item.review_status}</p>
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-semibold text-red-700">{item.mistake_type || '错题记录'} · {item.review_status}</p>
+              <button onClick={() => void onDelete(item.id)} disabled={loading} className="rounded-lg bg-white p-2 text-red-500 hover:bg-red-100 disabled:text-slate-400" title="删除错题">
+                {loading ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />}
+              </button>
+            </div>
             <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{item.ai_analysis}</p>
             {item.weak_points && <p className="mt-2 text-sm text-slate-600">薄弱点：{item.weak_points}</p>}
             {item.suggestion && <p className="text-sm text-slate-600">建议：{item.suggestion}</p>}

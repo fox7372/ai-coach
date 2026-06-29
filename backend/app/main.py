@@ -2499,3 +2499,13 @@ def list_mistakes(user_id: int = 1, course_id: int | None = None, db: Session = 
         for item in mistakes
     ]
 
+
+@app.delete("/mistakes/{mistake_id}")
+def delete_mistake(mistake_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
+    mistake = db.scalar(select(MistakeRecord).where(MistakeRecord.id == mistake_id, MistakeRecord.user_id == user_id))
+    if mistake is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="错题不存在")
+    db.delete(mistake)
+    db.commit()
+    return {"status": "deleted", "mistake_id": mistake_id}
+
