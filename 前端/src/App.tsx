@@ -261,17 +261,37 @@ function App() {
           <SideButton active={mainView === 'upload'} icon={<FileUp size={18} />} label="上传/导入" onClick={() => setMainView('upload')} />
           <SideButton active={mainView === 'settings'} icon={<Settings size={18} />} label="设置" onClick={() => setMainView('settings')} />
         </nav>
+        <div className="mt-8 rounded-2xl border border-white/10 bg-white/6 p-4">
+          <p className="text-xs text-slate-400">当前学生</p>
+          <p className="mt-1 font-semibold">{user.nickname || user.username}</p>
+          <div className="mt-4 grid gap-2 text-xs text-slate-300">
+            <div className="flex items-center justify-between"><span>课程</span><span className="font-semibold text-white">{courses.length}</span></div>
+            <div className="flex items-center justify-between"><span>AI 后端</span><span className="text-emerald-300">DeepSeek</span></div>
+          </div>
+        </div>
       </aside>
       <section className="ml-72 min-h-[100dvh]">
-        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200/70 bg-white/78 px-8 py-5 backdrop-blur">
+        <header className="sticky top-0 z-10 border-b border-slate-200/70 bg-white/78 px-8 py-4 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-emerald-700">React + FastAPI + MariaDB</p>
-            <h1 className="balanced-text text-2xl font-semibold text-slate-950">{selectedCourse?.name || 'AI 学习诊断系统'}</h1>
+              <p className="text-sm font-medium text-emerald-700">学习控制台</p>
+              <h1 className="balanced-text text-2xl font-semibold text-slate-950">{selectedCourse?.name || 'AI 学习诊断系统'}</h1>
           </div>
-          <button onClick={() => setUser(null)} className="secondary-action inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm">
-            <LogOut size={16} />
-            退出
-          </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="hidden gap-5 rounded-2xl border border-slate-200 bg-white/70 px-4 py-2 text-sm text-slate-600 shadow-sm lg:flex">
+                <div><span className="text-slate-400">课程</span><span className="ml-2 font-semibold text-slate-950">{courses.length}</span></div>
+                <div><span className="text-slate-400">当前</span><span className="ml-2 font-semibold text-slate-950">{selectedCourse?.name || '未选择'}</span></div>
+              </div>
+              <button onClick={() => setMainView('upload')} className="primary-action inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold">
+                <FileUp size={16} />
+                加资料
+              </button>
+              <button onClick={() => setUser(null)} className="secondary-action inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm">
+                <LogOut size={16} />
+                退出
+              </button>
+            </div>
+          </div>
         </header>
         <div className="mx-auto max-w-[1440px] p-8">
           {mainView === 'courses' && <CoursesView courses={courses} onOpen={openCourse} onDelete={deleteCourse} />}
@@ -296,13 +316,23 @@ function SideButton({ active, icon, label, onClick }: { active: boolean; icon: R
 function CoursesView({ courses, onOpen, onDelete }: { courses: Course[]; onOpen: (id: number) => void; onDelete: (id: number) => Promise<void> }) {
   return (
     <div>
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="workspace-band p-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-sm font-medium text-emerald-700">课程工作区</p>
+            <p className="section-kicker">课程工作区</p>
           <h2 className="mt-1 text-3xl font-semibold text-slate-950">课程列表</h2>
-          <p className="mt-2 max-w-2xl text-sm text-slate-500">每门课程都有独立资料、问答、计划、测验和错题库。</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">每门课程都有独立资料、问答、计划、测验和错题库。先选课程，再进入对应工作区。</p>
         </div>
-        <div className="soft-card px-4 py-3 text-sm text-slate-600">共 {courses.length} 门课程</div>
+          <div className="grid gap-1 text-right">
+            <p className="text-3xl font-semibold text-slate-950">{courses.length}</p>
+            <p className="text-sm text-slate-500">门课程</p>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="soft-card p-3 text-sm text-slate-600">资料导入后自动归入课程</div>
+          <div className="soft-card p-3 text-sm text-slate-600">测验和错题按课程隔离</div>
+          <div className="soft-card p-3 text-sm text-slate-600">学习计划可随反馈更新</div>
+        </div>
       </div>
       <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {courses.map((course) => (
@@ -320,12 +350,15 @@ function CoursesView({ courses, onOpen, onDelete }: { courses: Course[]; onOpen:
               <div className="soft-card p-3">
                 <p className="text-xs text-slate-500">进度</p>
                 <p className="mt-1 text-lg font-semibold text-slate-900">{course.progress}%</p>
+                <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, course.progress)}%` }} /></div>
               </div>
               <div className="soft-card p-3">
                 <p className="text-xs text-slate-500">掌握</p>
                 <p className="mt-1 text-lg font-semibold text-slate-900">{course.mastery}%</p>
+                <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-slate-700" style={{ width: `${Math.min(100, course.mastery)}%` }} /></div>
               </div>
             </div>
+            <button onClick={() => onOpen(course.id)} className="secondary-action mt-4 w-full rounded-xl px-3 py-2 text-sm font-semibold">打开课程</button>
           </Panel>
         ))}
         {!courses.length && <Panel className="md:col-span-2 xl:col-span-3"><p className="text-sm text-slate-500">暂无课程。可以在“上传/导入”中上传资料，或用 AI 推荐资料先创建课程。</p></Panel>}
@@ -500,24 +533,27 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   return (
     <div>
-      <div className="panel-surface overflow-hidden p-6">
+      <div className="workspace-band overflow-hidden p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-emerald-700">课程详情</p>
+            <p className="section-kicker">课程详情</p>
             <h2 className="balanced-text mt-1 text-3xl font-semibold text-slate-950">{activeCourse.name}</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{activeCourse.description || '暂无课程说明。'}</p>
           </div>
           {notice && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{notice}</p>}
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <button onClick={() => setTab('resources')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">资料</p><p className="mt-1 text-xl font-semibold text-slate-950">{resources.length}</p></button>
+          <button onClick={() => setTab('knowledge')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">知识点</p><p className="mt-1 text-xl font-semibold text-slate-950">{knowledge.length}</p></button>
+          <button onClick={() => setTab('mistakes')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">错题</p><p className="mt-1 text-xl font-semibold text-slate-950">{mistakes.length}</p></button>
+          <button onClick={() => setTab('quiz')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">作答</p><p className="mt-1 text-xl font-semibold text-slate-950">{quizAnswerRecords.length}</p></button>
           <div className="soft-card p-3"><p className="text-xs text-slate-500">进度</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.progress}%</p></div>
           <div className="soft-card p-3"><p className="text-xs text-slate-500">掌握</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.mastery}%</p></div>
-          <div className="soft-card p-3"><p className="text-xs text-slate-500">子目录</p><p className="mt-1 text-xl font-semibold text-slate-950">{tabs.length}</p></div>
         </div>
       </div>
-      <div className="mt-5 flex flex-wrap gap-2 rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-sm">
+      <div className="tab-strip mt-5 flex gap-2 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-sm">
         {tabs.map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)} className={`rounded-xl px-3 py-2 text-sm font-medium ${tab === key ? 'bg-slate-950 text-white shadow-lg shadow-slate-900/10' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}>
+          <button key={key} onClick={() => setTab(key)} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-medium ${tab === key ? 'bg-slate-950 text-white shadow-lg shadow-slate-900/10' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}>
             {label}
           </button>
         ))}
@@ -539,13 +575,39 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
 function Overview({ course, resources, knowledge, mistakes, suggestions }: { course: Course; resources: Resource[]; knowledge: KnowledgePoint[]; mistakes: Mistake[]; suggestions: Suggestion[] }) {
   return (
-    <div className="grid gap-5 xl:grid-cols-3">
+    <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+      <Panel className="xl:row-span-2">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="section-kicker">学习画像快照</p>
+            <h3 className="mt-1 text-2xl font-semibold text-slate-950">{course.name}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-500">从资料、测验、错题和计划四个入口观察当前课程状态。</p>
+          </div>
+          <BrainCircuit className="text-emerald-700" />
+        </div>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <ProgressBlock label="课程进度" value={course.progress} tone="emerald" />
+          <ProgressBlock label="掌握度" value={course.mastery} tone="slate" />
+        </div>
+      </Panel>
       <Panel><Metric icon={<FileText />} label="资料数" value={resources.length} /></Panel>
       <Panel><Metric icon={<Target />} label="知识点" value={knowledge.length} /></Panel>
       <Panel><Metric icon={<ClipboardList />} label="错题" value={mistakes.length} /></Panel>
-      <Panel><Metric icon={<BookOpen />} label="课程进度" value={`${course.progress}%`} /></Panel>
-      <Panel><Metric icon={<BrainCircuit />} label="掌握度" value={`${course.mastery}%`} /></Panel>
       <Panel><Metric icon={<MessageSquare />} label="建议数" value={suggestions.length} /></Panel>
+    </div>
+  )
+}
+
+function ProgressBlock({ label, value, tone }: { label: string; value: number; tone: 'emerald' | 'slate' }) {
+  return (
+    <div className="soft-card p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-500">{label}</p>
+        <p className="text-2xl font-semibold text-slate-950">{value}%</p>
+      </div>
+      <div className="mt-4 h-2 rounded-full bg-white">
+        <div className={`h-2 rounded-full ${tone === 'emerald' ? 'bg-emerald-500' : 'bg-slate-700'}`} style={{ width: `${Math.min(100, value)}%` }} />
+      </div>
     </div>
   )
 }
@@ -597,12 +659,15 @@ function ResourcesPanel({ courseId, resources, onChanged }: { courseId: number; 
   return (
     <Panel>
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-semibold">课程资料</h3>
+        <div>
+          <h3 className="font-semibold">课程资料</h3>
+          <p className="mt-1 text-sm text-slate-500">资料进入知识库后，问答、知识点和测验都会围绕当前课程生成。</p>
+        </div>
         {message && <p className="text-sm text-slate-500">{message}</p>}
       </div>
       <div className="mt-4 grid gap-3">
         {resources.map((item) => (
-          <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div key={item.id} className="content-rail p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-semibold">{item.title}</p>
@@ -621,7 +686,11 @@ function ResourcesPanel({ courseId, resources, onChanged }: { courseId: number; 
             {item.error_message && <p className="mt-2 text-sm text-red-600">{item.error_message}</p>}
           </div>
         ))}
-        {!resources.length && <p className="text-sm text-slate-500">暂无资料。</p>}
+        {!resources.length && (
+          <div className="content-rail p-5 text-sm text-slate-500">
+            暂无资料。可以到“上传/导入”添加 PDF、网页或视频，也可以先用 AI 推荐资料创建课程。
+          </div>
+        )}
       </div>
     </Panel>
   )
@@ -631,19 +700,22 @@ function KnowledgePanel({ items, loading, onGenerate }: { items: KnowledgePoint[
   return (
     <Panel>
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-semibold">知识点</h3>
+        <div>
+          <h3 className="font-semibold">知识点</h3>
+          <p className="mt-1 text-sm text-slate-500">知识点会保留来源位置和可信度，方便回到资料核对。</p>
+        </div>
         <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">按课程生成</button>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {items.map((item) => (
-          <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div key={item.id} className="content-rail p-4">
             <p className="font-semibold">{item.name}</p>
             <p className="mt-1 text-sm text-slate-600">{item.description || '暂无说明'}</p>
             <p className="mt-2 text-xs text-slate-500">来源：{item.source_document || '课程资料'} {item.confidence ? `可信度 ${item.confidence}%` : ''}</p>
             {item.source_excerpt && <p className="mt-2 line-clamp-2 text-xs text-slate-500">{item.source_excerpt}</p>}
           </div>
         ))}
-        {!items.length && <p className="text-sm text-slate-500">暂无知识点。可以在“资料”里针对单份资料生成。</p>}
+        {!items.length && <div className="content-rail p-5 text-sm text-slate-500 md:col-span-2">暂无知识点。可以先上传资料，再按课程生成，或在“资料”里针对单份资料生成。</div>}
       </div>
     </Panel>
   )
