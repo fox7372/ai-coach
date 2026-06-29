@@ -75,11 +75,20 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-.app-shell {
+.app-shell,
+.study-app-shell {
   min-height: 100dvh;
   background:
     linear-gradient(135deg, rgb(255 255 255 / 0.72), rgb(236 253 245 / 0.52)),
     #f7faf8;
+}
+
+.study-app-shell {
+  background:
+    radial-gradient(circle at 10% 8%, rgb(16 185 129 / 0.16), transparent 24rem),
+    radial-gradient(circle at 82% 10%, rgb(250 204 21 / 0.18), transparent 24rem),
+    radial-gradient(circle at 76% 84%, rgb(56 189 248 / 0.10), transparent 26rem),
+    linear-gradient(180deg, #fbfefb 0%, #eef8f2 100%);
 }
 
 .panel-surface {
@@ -133,6 +142,39 @@ select:focus-visible {
   background:
     radial-gradient(circle at 18% 0%, rgb(16 185 129 / 0.18), transparent 18rem),
     linear-gradient(180deg, #0c1714 0%, #111827 100%);
+}
+
+.study-sidebar {
+  border: 1px solid rgb(209 250 229 / 0.88);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.94), rgb(240 253 244 / 0.84));
+  box-shadow: 0 24px 80px rgb(15 23 42 / 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.learning-hero {
+  border: 1px solid rgb(187 247 208 / 0.92);
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgb(236 253 245 / 0.94), rgb(255 251 235 / 0.76)),
+    rgb(255 255 255 / 0.86);
+  box-shadow: 0 24px 80px rgb(15 23 42 / 0.07);
+}
+
+.lesson-card {
+  border: 1px solid rgb(209 250 229 / 0.78);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.96), rgb(247 254 231 / 0.42));
+  box-shadow: 0 18px 58px rgb(15 23 42 / 0.06);
+}
+
+.friendly-chip {
+  border: 1px solid rgb(187 247 208 / 0.88);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.76);
+  color: #047857;
 }
 
 .balanced-text {

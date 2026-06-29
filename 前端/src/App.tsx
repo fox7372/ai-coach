@@ -236,22 +236,26 @@ function App() {
   }
 
   return (
-    <main className="app-shell min-h-[100dvh] text-slate-900">
-      <aside className="sidebar-surface fixed inset-y-0 left-0 w-72 overflow-y-auto p-5 text-white">
+    <main className="study-app-shell min-h-[100dvh] text-slate-900">
+      <aside className="study-sidebar sticky top-3 z-20 m-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto p-5 text-slate-900 lg:fixed lg:inset-y-4 lg:left-4 lg:m-0 lg:w-72">
         <div className="flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-500 font-bold shadow-lg shadow-emerald-900/20">学</div>
+          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-500 font-bold text-white shadow-lg shadow-emerald-900/20">学</div>
           <div>
-            <p className="font-semibold tracking-wide">智学诊断台</p>
-            <p className="text-xs text-slate-400">AI Learning MVP</p>
+            <p className="font-semibold tracking-wide">我的学习空间</p>
+            <p className="text-xs text-slate-500">AI Learning MVP</p>
           </div>
         </div>
-        <nav className="mt-8 grid gap-2">
+        <div className="mt-6 rounded-3xl border border-emerald-100 bg-white/78 p-4 shadow-sm">
+          <p className="text-xs font-semibold text-emerald-700">今日入口</p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">选一门课，继续看资料、问 AI、做测验和整理错题。</p>
+        </div>
+        <nav className="mt-6 grid gap-2">
           <SideButton active={mainView === 'courses'} icon={<BookOpen size={18} />} label="课程" onClick={() => setMainView('courses')} />
-          <div className={`rounded-2xl ${mainView === 'detail' ? 'bg-white/7 p-1' : ''}`}>
+          <div className={`rounded-3xl ${mainView === 'detail' ? 'bg-emerald-50/80 p-1' : ''}`}>
             <SideButton active={mainView === 'detail'} icon={<Layers3 size={18} />} label="课程详情" onClick={() => setMainView('detail')} />
-            <div className="ml-6 mt-2 grid gap-1 border-l border-white/10 pb-2 pl-3">
+            <div className="ml-6 mt-2 grid gap-1 border-l border-emerald-100 pb-2 pl-3">
               {courses.map((course) => (
-                <button key={course.id} onClick={() => openCourse(course.id)} className={`rounded-xl px-3 py-2 text-left text-sm ${selectedCourse?.id === course.id && mainView === 'detail' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/20' : 'text-slate-300 hover:bg-white/8 hover:text-white'}`}>
+                <button key={course.id} onClick={() => openCourse(course.id)} className={`rounded-2xl px-3 py-2 text-left text-sm ${selectedCourse?.id === course.id && mainView === 'detail' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:bg-white hover:text-emerald-700'}`}>
                   {course.name}
                 </button>
               ))}
@@ -261,24 +265,25 @@ function App() {
           <SideButton active={mainView === 'upload'} icon={<FileUp size={18} />} label="上传/导入" onClick={() => setMainView('upload')} />
           <SideButton active={mainView === 'settings'} icon={<Settings size={18} />} label="设置" onClick={() => setMainView('settings')} />
         </nav>
-        <div className="mt-8 rounded-2xl border border-white/10 bg-white/6 p-4">
-          <p className="text-xs text-slate-400">当前学生</p>
+        <div className="mt-8 rounded-3xl border border-emerald-100 bg-emerald-50/72 p-4">
+          <p className="text-xs text-slate-500">当前学生</p>
           <p className="mt-1 font-semibold">{user.nickname || user.username}</p>
-          <div className="mt-4 grid gap-2 text-xs text-slate-300">
-            <div className="flex items-center justify-between"><span>课程</span><span className="font-semibold text-white">{courses.length}</span></div>
-            <div className="flex items-center justify-between"><span>AI 后端</span><span className="text-emerald-300">DeepSeek</span></div>
+          <div className="mt-4 grid gap-2 text-xs text-slate-600">
+            <div className="flex items-center justify-between"><span>课程</span><span className="font-semibold text-slate-950">{courses.length}</span></div>
+            <div className="flex items-center justify-between"><span>AI 后端</span><span className="font-semibold text-emerald-700">DeepSeek</span></div>
           </div>
         </div>
       </aside>
-      <section className="ml-72 min-h-[100dvh]">
-        <header className="sticky top-0 z-10 border-b border-slate-200/70 bg-white/78 px-8 py-4 backdrop-blur">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-              <p className="text-sm font-medium text-emerald-700">学习控制台</p>
-              <h1 className="balanced-text text-2xl font-semibold text-slate-950">{selectedCourse?.name || 'AI 学习诊断系统'}</h1>
-          </div>
+      <section className="min-h-[100dvh] lg:ml-[312px]">
+        <header className="px-4 pt-2 lg:px-8 lg:pt-6">
+          <div className="learning-hero mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 p-5">
+            <div>
+              <p className="section-kicker">今天的学习空间</p>
+              <h1 className="balanced-text mt-1 text-2xl font-semibold text-slate-950">{selectedCourse?.name || '先选一门课开始'}</h1>
+              <p className="mt-1 text-sm text-slate-600">课程、资料、问答、计划、测验和错题都在这里串起来。</p>
+            </div>
             <div className="flex flex-wrap items-center gap-3">
-              <div className="hidden gap-5 rounded-2xl border border-slate-200 bg-white/70 px-4 py-2 text-sm text-slate-600 shadow-sm lg:flex">
+              <div className="hidden gap-5 rounded-2xl border border-emerald-100 bg-white/78 px-4 py-2 text-sm text-slate-600 shadow-sm lg:flex">
                 <div><span className="text-slate-400">课程</span><span className="ml-2 font-semibold text-slate-950">{courses.length}</span></div>
                 <div><span className="text-slate-400">当前</span><span className="ml-2 font-semibold text-slate-950">{selectedCourse?.name || '未选择'}</span></div>
               </div>
@@ -293,7 +298,7 @@ function App() {
             </div>
           </div>
         </header>
-        <div className="mx-auto max-w-[1440px] p-8">
+        <div className="mx-auto max-w-[1440px] px-4 py-6 lg:px-8">
           {mainView === 'courses' && <CoursesView courses={courses} onOpen={openCourse} onDelete={deleteCourse} />}
           {mainView === 'detail' && <CourseDetailView course={selectedCourse} userId={user.id} />}
           {mainView === 'upload' && <UploadView userId={user.id} courses={courses} onCoursesChanged={loadCourses} />}
@@ -306,7 +311,7 @@ function App() {
 
 function SideButton({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
-    <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/20' : 'text-slate-300 hover:bg-white/8 hover:text-white'}`}>
+    <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-900/18' : 'text-slate-600 hover:bg-white hover:text-emerald-700'}`}>
       {icon}
       {label}
     </button>
@@ -316,27 +321,27 @@ function SideButton({ active, icon, label, onClick }: { active: boolean; icon: R
 function CoursesView({ courses, onOpen, onDelete }: { courses: Course[]; onOpen: (id: number) => void; onDelete: (id: number) => Promise<void> }) {
   return (
     <div>
-      <div className="workspace-band p-6">
+      <div className="learning-hero p-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-            <p className="section-kicker">课程工作区</p>
-          <h2 className="mt-1 text-3xl font-semibold text-slate-950">课程列表</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">每门课程都有独立资料、问答、计划、测验和错题库。先选课程，再进入对应工作区。</p>
-        </div>
+          <div>
+            <p className="section-kicker">继续学习</p>
+            <h2 className="mt-1 text-3xl font-semibold text-slate-950">今天想学哪门课？</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">每门课程都有自己的资料、AI 问答、学习计划、测验和错题库。选一门课继续往前走。</p>
+          </div>
           <div className="grid gap-1 text-right">
             <p className="text-3xl font-semibold text-slate-950">{courses.length}</p>
             <p className="text-sm text-slate-500">门课程</p>
           </div>
         </div>
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <div className="soft-card p-3 text-sm text-slate-600">资料导入后自动归入课程</div>
-          <div className="soft-card p-3 text-sm text-slate-600">测验和错题按课程隔离</div>
-          <div className="soft-card p-3 text-sm text-slate-600">学习计划可随反馈更新</div>
+          <div className="friendly-chip px-4 py-3 text-sm font-medium">先看资料</div>
+          <div className="friendly-chip px-4 py-3 text-sm font-medium">再问 AI</div>
+          <div className="friendly-chip px-4 py-3 text-sm font-medium">最后做测验</div>
         </div>
       </div>
       <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {courses.map((course) => (
-          <Panel key={course.id} className="group overflow-hidden">
+          <div key={course.id} className="lesson-card group overflow-hidden p-5">
             <div className="flex items-start justify-between gap-3">
               <button onClick={() => onOpen(course.id)} className="min-w-0 flex-1 text-left">
                 <p className="truncate text-lg font-semibold text-slate-950 group-hover:text-emerald-700">{course.name}</p>
@@ -347,19 +352,19 @@ function CoursesView({ courses, onOpen, onDelete }: { courses: Course[]; onOpen:
               </button>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
-              <div className="soft-card p-3">
+              <div className="rounded-2xl border border-emerald-100 bg-white/74 p-3">
                 <p className="text-xs text-slate-500">进度</p>
                 <p className="mt-1 text-lg font-semibold text-slate-900">{course.progress}%</p>
                 <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, course.progress)}%` }} /></div>
               </div>
-              <div className="soft-card p-3">
+              <div className="rounded-2xl border border-emerald-100 bg-white/74 p-3">
                 <p className="text-xs text-slate-500">掌握</p>
                 <p className="mt-1 text-lg font-semibold text-slate-900">{course.mastery}%</p>
                 <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-slate-700" style={{ width: `${Math.min(100, course.mastery)}%` }} /></div>
               </div>
             </div>
-            <button onClick={() => onOpen(course.id)} className="secondary-action mt-4 w-full rounded-xl px-3 py-2 text-sm font-semibold">打开课程</button>
-          </Panel>
+            <button onClick={() => onOpen(course.id)} className="primary-action mt-4 w-full rounded-2xl px-3 py-2.5 text-sm font-semibold">继续学习</button>
+          </div>
         ))}
         {!courses.length && <Panel className="md:col-span-2 xl:col-span-3"><p className="text-sm text-slate-500">暂无课程。可以在“上传/导入”中上传资料，或用 AI 推荐资料先创建课程。</p></Panel>}
       </div>
@@ -533,27 +538,27 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   return (
     <div>
-      <div className="workspace-band overflow-hidden p-6">
+      <div className="learning-hero overflow-hidden p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="section-kicker">课程详情</p>
             <h2 className="balanced-text mt-1 text-3xl font-semibold text-slate-950">{activeCourse.name}</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{activeCourse.description || '暂无课程说明。'}</p>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{activeCourse.description || '暂无课程说明。'}</p>
           </div>
           {notice && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{notice}</p>}
         </div>
         <div className="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
-          <button onClick={() => setTab('resources')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">资料</p><p className="mt-1 text-xl font-semibold text-slate-950">{resources.length}</p></button>
-          <button onClick={() => setTab('knowledge')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">知识点</p><p className="mt-1 text-xl font-semibold text-slate-950">{knowledge.length}</p></button>
-          <button onClick={() => setTab('mistakes')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">错题</p><p className="mt-1 text-xl font-semibold text-slate-950">{mistakes.length}</p></button>
-          <button onClick={() => setTab('quiz')} className="soft-card p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">作答</p><p className="mt-1 text-xl font-semibold text-slate-950">{quizAnswerRecords.length}</p></button>
-          <div className="soft-card p-3"><p className="text-xs text-slate-500">进度</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.progress}%</p></div>
-          <div className="soft-card p-3"><p className="text-xs text-slate-500">掌握</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.mastery}%</p></div>
+          <button onClick={() => setTab('resources')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">资料</p><p className="mt-1 text-xl font-semibold text-slate-950">{resources.length}</p></button>
+          <button onClick={() => setTab('knowledge')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">知识点</p><p className="mt-1 text-xl font-semibold text-slate-950">{knowledge.length}</p></button>
+          <button onClick={() => setTab('mistakes')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">错题</p><p className="mt-1 text-xl font-semibold text-slate-950">{mistakes.length}</p></button>
+          <button onClick={() => setTab('quiz')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">作答</p><p className="mt-1 text-xl font-semibold text-slate-950">{quizAnswerRecords.length}</p></button>
+          <div className="rounded-2xl border border-emerald-100 bg-white/76 p-3"><p className="text-xs text-slate-500">进度</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.progress}%</p></div>
+          <div className="rounded-2xl border border-emerald-100 bg-white/76 p-3"><p className="text-xs text-slate-500">掌握</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.mastery}%</p></div>
         </div>
       </div>
-      <div className="tab-strip mt-5 flex gap-2 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-sm">
+      <div className="tab-strip mt-5 flex gap-2 overflow-x-auto rounded-3xl border border-emerald-100 bg-white/76 p-2 shadow-sm">
         {tabs.map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-medium ${tab === key ? 'bg-slate-950 text-white shadow-lg shadow-slate-900/10' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}>
+          <button key={key} onClick={() => setTab(key)} className={`shrink-0 rounded-2xl px-3 py-2 text-sm font-medium ${tab === key ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-900/15' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}>
             {label}
           </button>
         ))}
