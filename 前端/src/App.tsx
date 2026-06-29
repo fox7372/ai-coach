@@ -63,8 +63,11 @@ type Mistake = {
   ai_analysis: string | null
   weak_points: string | null
   suggestion: string | null
+  image_path?: string | null
+  ocr_text?: string | null
   review_status: string
 }
+type OcrMistakeResult = { image_path: string; ocr_text: string; ocr_engine: string; message: string }
 type Diagnosis = { progress: number; mastery: number; items: Array<{ label: string; value: number; status: string }> }
 type Profile = { radar: Array<{ name: string; value: number }>; conclusion: string }
 type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string; created_at?: string }
@@ -566,11 +569,11 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       <div className="mt-5">
         {tab === 'overview' && <Overview course={activeCourse} resources={resources} knowledge={knowledge} mistakes={mistakes} suggestions={suggestions} />}
         {tab === 'resources' && <ResourcesPanel courseId={activeCourse.id} resources={resources} onChanged={loadDetail} />}
-        {tab === 'qa' && <QaView course={activeCourse} userId={userId} />}
+        {tab === 'qa' && <QaView course={activeCourse} userId={userId} onMistakeSaved={loadDetail} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
         {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
         {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} answerRecords={quizAnswerRecords} loading={loading} onGenerate={generateQuiz} onAnswered={loadDetail} onMistakeSaved={loadDetail} />}
-        {tab === 'mistakes' && <MistakesPanel mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} onDelete={deleteMistake} loading={loading} />}
+        {tab === 'mistakes' && <MistakesPanel courseId={activeCourse.id} userId={userId} mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} onSaved={loadDetail} onDelete={deleteMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}
         {tab === 'profile' && <ProfilePanel profile={profile} />}
       </div>
@@ -1102,13 +1105,131 @@ function QuizPanel({
   )
 }
 
-function MistakesPanel({ mistakes, value, onChange, onSave, onDelete, loading }: { mistakes: Mistake[]; value: string; onChange: (value: string) => void; onSave: () => Promise<void>; onDelete: (mistakeId: number) => Promise<void>; loading: boolean }) {
+function MistakesPanel({
+  courseId,
+  userId,
+  mistakes,
+  value,
+  onChange,
+  onSave,
+  onSaved,
+  onDelete,
+  loading,
+}: {
+  courseId: number
+  userId: number
+  mistakes: Mistake[]
+  value: string
+  onChange: (value: string) => void
+  onSave: () => Promise<void>
+  onSaved: () => Promise<void>
+  onDelete: (mistakeId: number) => Promise<void>
+  loading: boolean
+}) {
+  const [imageBusy, setImageBusy] = useState(false)
+  const [imageMessage, setImageMessage] = useState('')
+  const [ocrResult, setOcrResult] = useState<OcrMistakeResult | null>(null)
+  const [questionText, setQuestionText] = useState('')
+  const [studentAnswer, setStudentAnswer] = useState('')
+  const [correctAnswer, setCorrectAnswer] = useState('')
+  const [imageAnalysis, setImageAnalysis] = useState('')
+
+  async function uploadMistakeImage(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setImageBusy(true)
+    setImageMessage('正在保存图片并尝试 OCR 识别...')
+    setImageAnalysis('')
+    try {
+      const formData = new FormData()
+      formData.append('image', file)
+      const result = (await http.post(`/api/ai/ocr-mistake-image?user_id=${userId}&course_id=${courseId}`, formData, { timeout: 120000 })) as unknown as OcrMistakeResult
+      setOcrResult(result)
+      setQuestionText(result.ocr_text)
+      setImageMessage(result.message)
+    } catch (error: any) {
+      setImageMessage(error?.response?.data?.detail || '图片识别失败，请稍后重试。')
+    } finally {
+      setImageBusy(false)
+      event.target.value = ''
+    }
+  }
+
+  async function analyzeImageMistake() {
+    if (!questionText.trim()) {
+      setImageMessage('请先确认或输入题目文字。')
+      return
+    }
+    setImageBusy(true)
+    setImageMessage('AI 正在分析错题图片...')
+    try {
+      const result = (await http.post('/api/ai/analyze-mistake-image', {
+        user_id: userId,
+        course_id: courseId,
+        question_text: questionText,
+        student_answer: studentAnswer,
+        correct_answer: correctAnswer,
+        image_path: ocrResult?.image_path,
+        ocr_text: ocrResult?.ocr_text,
+        save_to_mistakes: true,
+      }, { timeout: 300000 })) as unknown as { analysis: string; mistake_id: number | null }
+      setImageAnalysis(result.analysis)
+      setImageMessage(result.mistake_id ? 'AI 分析完成，已加入错题库。' : 'AI 分析完成。')
+      await onSaved()
+    } catch (error: any) {
+      setImageMessage(error?.response?.data?.detail || 'AI 分析失败，请检查后端或稍后重试。')
+    } finally {
+      setImageBusy(false)
+    }
+  }
+
   return (
     <Panel>
       <h3 className="font-semibold">错题库</h3>
       <div className="mt-4 flex gap-3">
         <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" placeholder="记录一道错题或薄弱点" />
         <button onClick={() => void onSave()} disabled={loading} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">保存</button>
+      </div>
+      <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h4 className="font-semibold text-slate-900">上传错题图片</h4>
+            <p className="mt-1 text-sm text-slate-500">先 OCR 识别图片文字，学生确认后再交给 DeepSeek 分析并加入错题库。</p>
+          </div>
+          <label className="secondary-action inline-flex cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold">
+            {imageBusy ? <Loader2 className="animate-spin" size={16} /> : <FileUp size={16} />}
+            选择图片
+            <input type="file" accept="image/*" onChange={(event) => void uploadMistakeImage(event)} className="hidden" />
+          </label>
+        </div>
+        {imageMessage && <p className="mt-3 rounded-xl bg-white/80 px-3 py-2 text-sm text-slate-600">{imageMessage}</p>}
+        {(ocrResult || questionText) && (
+          <div className="mt-4 grid gap-3">
+            <label className="block text-sm font-medium text-slate-700">
+              识别/确认后的题目文字
+              <textarea value={questionText} onChange={(event) => setQuestionText(event.target.value)} rows={5} className="mt-2 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-500" placeholder="OCR 没识别出来时，可以手动输入题目文字。" />
+            </label>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block text-sm font-medium text-slate-700">
+                学生答案
+                <textarea value={studentAnswer} onChange={(event) => setStudentAnswer(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-500" placeholder="可选，填入学生写错的答案。" />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                参考答案
+                <textarea value={correctAnswer} onChange={(event) => setCorrectAnswer(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-500" placeholder="可选，有答案时填入。" />
+              </label>
+            </div>
+            <button onClick={() => void analyzeImageMistake()} disabled={imageBusy || !questionText.trim()} className="primary-action inline-flex w-fit items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
+              {imageBusy ? <Loader2 className="animate-spin" size={16} /> : <BrainCircuit size={16} />}
+              AI 分析并加入错题库
+            </button>
+            {imageAnalysis && (
+              <div className="markdown-answer rounded-xl bg-white p-4 text-sm">
+                <ReactMarkdown>{imageAnalysis}</ReactMarkdown>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="mt-4 grid gap-3">
         {mistakes.map((item) => (
@@ -1120,6 +1241,7 @@ function MistakesPanel({ mistakes, value, onChange, onSave, onDelete, loading }:
               </button>
             </div>
             <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{item.ai_analysis}</p>
+            {item.ocr_text && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-white/70 p-3 text-xs text-slate-500">OCR/题目文字：{item.ocr_text}</p>}
             {item.weak_points && <p className="mt-2 text-sm text-slate-600">薄弱点：{item.weak_points}</p>}
             {item.suggestion && <p className="text-sm text-slate-600">建议：{item.suggestion}</p>}
           </div>
@@ -1504,7 +1626,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   )
 }
 
-function QaView({ course, userId }: { course: Course | null; userId: number }) {
+function QaView({ course, userId, onMistakeSaved }: { course: Course | null; userId: number; onMistakeSaved: () => Promise<void> }) {
   const [question, setQuestion] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -1513,6 +1635,8 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
   const [searchResults, setSearchResults] = useState<ChatSearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [savingMistakeId, setSavingMistakeId] = useState<number | string | null>(null)
+  const [mistakeMessage, setMistakeMessage] = useState('')
 
   async function loadSessions(preferredSessionId?: number | null) {
     if (!course) return
@@ -1578,6 +1702,28 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
     }
   }
 
+  async function saveAnswerAsMistake(message: ChatMessage, previousQuestion?: string) {
+    if (!course || message.role !== 'assistant') return
+    setSavingMistakeId(message.id)
+    setMistakeMessage('')
+    try {
+      await http.post('/mistakes', {
+        user_id: userId,
+        course_id: course.id,
+        mistake_type: 'qa_review',
+        ai_analysis: `来自 AI 问答的复盘记录\n\n学生问题：\n${previousQuestion || '未记录'}\n\nAI 回答：\n${message.content}`,
+        weak_points: '由学生从 AI 问答加入错题库',
+        suggestion: '回到原问题和课程资料核对，整理成自己的订正笔记。',
+      })
+      setMistakeMessage('已加入当前课程错题库。')
+      await onMistakeSaved()
+    } catch (error: any) {
+      setMistakeMessage(error?.response?.data?.detail || '加入错题库失败。')
+    } finally {
+      setSavingMistakeId(null)
+    }
+  }
+
   useEffect(() => {
     setQuestion('')
     setMessages([])
@@ -1585,6 +1731,7 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
     setActiveSessionId(null)
     setSearchKeyword('')
     setSearchResults([])
+    setMistakeMessage('')
     void loadSessions()
   }, [course?.id])
 
@@ -1639,12 +1786,25 @@ function QaView({ course, userId }: { course: Course | null; userId: number }) {
       <Panel>
         <h3 className="font-semibold">AI 问答</h3>
         <p className="mt-1 text-sm text-slate-500">当前课程：{course.name}</p>
+        {mistakeMessage && <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{mistakeMessage}</p>}
         <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
           {historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">正在加载历史...</div>}
-          {messages.map((message) => (
+          {messages.map((message, index) => (
             <div key={message.id} className={`rounded-lg p-4 ${message.role === 'user' ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50'}`}>
               <ReactMarkdown>{message.content}</ReactMarkdown>
-              {message.created_at && <p className="mt-2 text-xs text-slate-400">{new Date(message.created_at).toLocaleString()}</p>}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                {message.created_at && <p className="text-xs text-slate-400">{new Date(message.created_at).toLocaleString()}</p>}
+                {message.role === 'assistant' && (
+                  <button
+                    onClick={() => void saveAnswerAsMistake(message, messages[index - 1]?.role === 'user' ? messages[index - 1].content : '')}
+                    disabled={savingMistakeId === message.id}
+                    className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400"
+                  >
+                    {savingMistakeId === message.id ? <Loader2 className="animate-spin" size={13} /> : <Plus size={13} />}
+                    加入错题本
+                  </button>
+                )}
+              </div>
             </div>
           ))}
           {!messages.length && !historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">选择一个历史对话，或新建对话后开始提问。</div>}

@@ -184,6 +184,17 @@ class MistakeAnalyzeRequest(BaseModel):
     correct_answer: str | None = None
 
 
+class MistakeImageAnalyzeRequest(BaseModel):
+    user_id: int = 1
+    course_id: int = 1
+    question_text: str
+    student_answer: str | None = None
+    correct_answer: str | None = None
+    image_path: str | None = None
+    ocr_text: str | None = None
+    save_to_mistakes: bool = True
+
+
 class QuizSubmitRequest(BaseModel):
     user_id: int = 1
     course_id: int = 1
@@ -823,6 +834,8 @@ class MistakeCreate(BaseModel):
     ai_analysis: str
     weak_points: str | None = None
     suggestion: str | None = None
+    image_path: str | None = None
+    ocr_text: str | None = None
 
 
 def hash_password(password: str) -> str:
@@ -898,6 +911,55 @@ def delete_uploaded_file(storage_path: str) -> bool:
     return False
 
 
+def save_mistake_image(file: UploadFile, user_id: int, course_id: int) -> Path:
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请上传图片文件")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+        suffix = ".png"
+
+    image_dir = UPLOAD_DIR / "mistake-images" / str(user_id) / str(course_id)
+    image_dir.mkdir(parents=True, exist_ok=True)
+    target = image_dir / f"{uuid4().hex}{suffix}"
+    with target.open("wb") as output:
+        while chunk := file.file.read(1024 * 1024):
+            output.write(chunk)
+    return target
+
+
+def extract_text_from_image(image_path: Path) -> tuple[str, str]:
+    try:
+        from paddleocr import PaddleOCR  # type: ignore
+
+        ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+        result = ocr.ocr(str(image_path), cls=True)
+        lines: list[str] = []
+        for page in result or []:
+            for item in page or []:
+                if len(item) >= 2 and item[1]:
+                    lines.append(str(item[1][0]))
+        text_value = "\n".join(line.strip() for line in lines if line.strip())
+        if text_value:
+            return text_value, "paddleocr"
+    except Exception:
+        pass
+
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image  # type: ignore
+
+        text_value = pytesseract.image_to_string(Image.open(image_path), lang="chi_sim+eng")
+        text_value = text_value.strip()
+        if text_value:
+            return text_value, "tesseract"
+    except Exception:
+        pass
+
+    return "", "manual"
+
+
 def ensure_chat_schema() -> None:
     with engine.begin() as connection:
         columns = {
@@ -951,6 +1013,10 @@ def ensure_resource_schema() -> None:
         },
         "answer_records": {
             "ai_feedback": "TEXT NULL",
+        },
+        "mistake_records": {
+            "image_path": "TEXT NULL",
+            "ocr_text": "LONGTEXT NULL",
         },
     }
     with engine.begin() as connection:
@@ -1836,6 +1902,67 @@ def analyze_mistake(payload: MistakeAnalyzeRequest, db: Session = Depends(get_db
     return {"mistake_id": mistake.id, "analysis": result, "mastery_effect": -5}
 
 
+@app.post("/api/ai/ocr-mistake-image")
+def ocr_mistake_image(
+    user_id: int = 1,
+    course_id: int = 1,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id, CourseModel.user_id == user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+
+    image_path = save_mistake_image(image, user_id, course_id)
+    ocr_text, ocr_engine = extract_text_from_image(image_path)
+    return {
+        "image_path": str(image_path),
+        "ocr_text": ocr_text,
+        "ocr_engine": ocr_engine,
+        "message": "已识别图片文字，请核对后再让 AI 分析。" if ocr_text else "图片已保存。当前 OCR 环境不可用或未识别出文字，请手动输入/修正题目文字后再分析。",
+    }
+
+
+@app.post("/api/ai/analyze-mistake-image")
+def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    if not payload.question_text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先确认或输入题目文字")
+
+    result = ai_service.generate_text(
+        "你是错题图片分析助手。请用中文分析题目、解题步骤、错误原因、薄弱知识点和下一步练习建议。"
+        "如果 OCR 文字可能不完整，请明确提醒学生核对原图。",
+        (
+            f"OCR/确认后的题目文字：\n{payload.question_text}\n\n"
+            f"学生答案：{payload.student_answer or '未提供'}\n"
+            f"参考答案：{payload.correct_answer or '未提供'}"
+        ),
+    )
+
+    mistake_id: int | None = None
+    if payload.save_to_mistakes:
+        mistake = MistakeRecord(
+            user_id=payload.user_id,
+            course_id=payload.course_id,
+            mistake_type="image_mistake",
+            ai_analysis=f"题目文字：\n{payload.question_text}\n\nAI 分析：\n{result}",
+            weak_points="由错题图片分析生成",
+            suggestion="核对 OCR 文字后，按 AI 建议完成订正和同类练习。",
+            image_path=payload.image_path,
+            ocr_text=payload.ocr_text or payload.question_text,
+        )
+        db.add(mistake)
+
+        course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
+        if course is not None:
+            course.mastery = max(0, min(100, course.mastery - 5))
+
+        db.commit()
+        db.refresh(mistake)
+        mistake_id = mistake.id
+
+    return {"mistake_id": mistake_id, "analysis": result, "mastery_effect": -5 if payload.save_to_mistakes else 0}
+
+
 @app.post("/api/quiz/submit-answer")
 def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     question = db.scalar(select(Question).where(Question.id == payload.question_id, Question.course_id == payload.course_id))
@@ -2472,6 +2599,8 @@ def create_mistake(payload: MistakeCreate, db: Session = Depends(get_db)) -> dic
         ai_analysis=payload.ai_analysis,
         weak_points=payload.weak_points,
         suggestion=payload.suggestion,
+        image_path=payload.image_path,
+        ocr_text=payload.ocr_text,
     )
     db.add(mistake)
     db.commit()
@@ -2493,6 +2622,8 @@ def list_mistakes(user_id: int = 1, course_id: int | None = None, db: Session = 
             "ai_analysis": item.ai_analysis,
             "weak_points": item.weak_points,
             "suggestion": item.suggestion,
+            "image_path": item.image_path,
+            "ocr_text": item.ocr_text,
             "review_status": item.review_status,
             "created_at": item.created_at,
         }

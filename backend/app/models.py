@@ -156,6 +156,8 @@ class MistakeRecord(Base):
     ai_analysis: Mapped[str | None] = mapped_column(Text)
     weak_points: Mapped[str | None] = mapped_column(Text)
     suggestion: Mapped[str | None] = mapped_column(Text)
+    image_path: Mapped[str | None] = mapped_column(Text)
+    ocr_text: Mapped[str | None] = mapped_column(Text)
     review_status: Mapped[str] = mapped_column(String(20), default="unreviewed")
     review_count: Mapped[int] = mapped_column(Integer, default=0)
     last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
