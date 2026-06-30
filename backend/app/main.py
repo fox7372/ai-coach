@@ -458,6 +458,8 @@ def has_direct_text_match(query: str, chunks: list[tuple[DocumentChunk, float]])
 
 
 def is_academic_knowledge_point(name: str, description: str) -> bool:
+    name = name.strip().strip("？?·:：-— ")
+    description = description.strip()
     text_value = f"{name} {description}"
     blocked_terms = [
         "课时",
@@ -480,8 +482,22 @@ def is_academic_knowledge_point(name: str, description: str) -> bool:
     ]
     if any(term.lower() in text_value.lower() for term in blocked_terms):
         return False
-    generic_names = {"知识点", "知识点名称", "核心概念", "概念"}
-    return name.strip() not in generic_names and len(name.strip()) >= 2
+    generic_names = {
+        "知识点",
+        "知识点名称",
+        "核心概念",
+        "概念",
+        "资料",
+        "任务内容",
+        "computer networking",
+        "security",
+        "a",
+    }
+    if name.lower() in generic_names or len(name) < 2:
+        return False
+    if re.fullmatch(r"[\d\s\\/:：.-]+", name) or re.fullmatch(r"[\d\s\\/:：.-]+", description):
+        return False
+    return True
 
 
 def parse_knowledge_point_result(result: str) -> list[dict[str, str]]:
@@ -494,7 +510,7 @@ def parse_knowledge_point_result(result: str) -> list[dict[str, str]]:
         for item in parsed:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or item.get("知识点") or "").strip()
+            name = str(item.get("name") or item.get("知识点") or "").strip().strip("？?·:：-— ")
             description = str(item.get("description") or item.get("说明") or "").strip()
             if name and description and is_academic_knowledge_point(name, description):
                 items.append({"name": name, "description": description})
@@ -507,7 +523,7 @@ def parse_knowledge_point_result(result: str) -> list[dict[str, str]]:
         if not clean or not separator:
             continue
         name, description = clean.split(separator, 1)
-        name = name.strip()
+        name = name.strip().strip("？?·:：-— ")
         description = description.strip()
         if name and description and is_academic_knowledge_point(name, description):
             items.append({"name": name, "description": description})
@@ -635,6 +651,40 @@ def find_knowledge_support(name: str, chunks: list[DocumentChunk], fallback: Doc
 def appears_in_chunks(name: str, chunks: list[DocumentChunk]) -> bool:
     lowered = name.lower()
     return any(lowered in chunk.chunk_text.lower() for chunk in chunks)
+
+
+def is_noisy_knowledge_chunk(chunk: DocumentChunk) -> bool:
+    text_value = chunk.chunk_text.strip()
+    lowered = text_value.lower()
+    if len(text_value) < 80:
+        return True
+    noisy_terms = [
+        "computer networking: a top-down approach",
+        "pearson",
+        "本章目标",
+        "第八章提纲",
+        "copyright",
+    ]
+    if any(term in lowered for term in noisy_terms):
+        return True
+    if (chunk.page_number or 0) <= 1 and len(text_value) < 1000:
+        return True
+    return False
+
+
+def select_knowledge_chunks(all_chunks: list[DocumentChunk], limit: int = 16) -> list[DocumentChunk]:
+    useful = [chunk for chunk in all_chunks if not is_noisy_knowledge_chunk(chunk)]
+    source = useful or all_chunks
+    if len(source) <= limit:
+        return source
+
+    selected: list[DocumentChunk] = []
+    step = max(1, math.floor(len(source) / limit))
+    for index in range(0, len(source), step):
+        selected.append(source[index])
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def clean_subtitle_text(text_value: str) -> str:
@@ -1779,12 +1829,12 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         )
         if source_document is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在或不属于当前课程")
-        chunks = db.scalars(
+        all_chunks = db.scalars(
             select(DocumentChunk)
             .where(DocumentChunk.document_id == payload.document_id, DocumentChunk.course_id == payload.course_id)
             .order_by(DocumentChunk.chunk_index)
-            .limit(12)
         ).all()
+        chunks = select_knowledge_chunks(all_chunks)
         if chunks:
             context = "\n\n".join(chunk.chunk_text for chunk in chunks)
         elif source_document.raw_content:
@@ -1793,12 +1843,12 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="这份资料还没有可用于生成知识点的解析内容")
         source_chunk = chunks[0] if chunks else None
     else:
-        chunks = db.scalars(
+        all_chunks = db.scalars(
             select(DocumentChunk)
             .where(DocumentChunk.course_id == payload.course_id)
-            .order_by(DocumentChunk.chunk_index)
-            .limit(20)
+            .order_by(DocumentChunk.document_id, DocumentChunk.chunk_index)
         ).all()
+        chunks = select_knowledge_chunks(all_chunks, limit=24)
         context = "\n\n".join(chunk.chunk_text for chunk in chunks) if chunks else get_course_context(db, payload.course_id, payload.text)
         source_chunk = chunks[0] if chunks else None
         source_document = db.get(Document, source_chunk.document_id) if source_chunk else None
@@ -1807,7 +1857,9 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         (
             "你是教学知识图谱助手。请只根据给定资料提取 5 到 8 个学科知识点。"
             "只保留资料原文中明确出现的课程内容概念。"
+            "知识点名称必须使用中文或课程中常用的技术缩写，不能用书名、章节标题、页眉、页脚、英文教材名或任务字段。"
             "不要提取课时、地点、成绩构成、DDL、直播、教材链接、课程安排等事务信息。"
+            "不要输出“资料”“任务内容”“Computer Networking”“Security”“本章目标”等非知识点。"
             "如果资料只有课程主页或目录，请只提取目录中出现的学科主题，并在说明中写“初步主题，需讲义内容补充”。"
             "必须只返回 JSON 数组，不要使用 Markdown，不要输出解释。"
             'JSON 格式：[{"name":"知识点名","description":"一句话说明"}]。'
