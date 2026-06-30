@@ -814,6 +814,10 @@ def split_text_to_chunks(text_value: str, target_chars: int = 1200, overlap_char
     return chunks
 
 
+def normalize_for_page_match(text_value: str) -> str:
+    return re.sub(r"\s+", "", text_value).lower()
+
+
 def extract_pdf_pages(path: Path) -> list[dict[str, object]]:
     try:
         import fitz
@@ -831,52 +835,107 @@ def extract_pdf_pages(path: Path) -> list[dict[str, object]]:
     return pages
 
 
+def extract_pdf_with_docling(path: Path) -> str:
+    try:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter
+        from docling.document_converter import PdfFormatOption
+    except ImportError as exc:
+        raise RuntimeError("后端缺少 Docling，请先安装 requirements.txt") from exc
+
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.document_timeout = 90
+    pipeline_options.do_ocr = False
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        }
+    )
+    result = converter.convert(str(path))
+    markdown = result.document.export_to_markdown().strip()
+    if not markdown:
+        raise RuntimeError("Docling 没有从 PDF 提取到可用文本。")
+    return markdown
+
+
+def find_chunk_page_number(chunk_text: str, pages: list[dict[str, object]]) -> int | None:
+    normalized_chunk = normalize_for_page_match(chunk_text)
+    if not normalized_chunk:
+        return None
+
+    probe = normalized_chunk[: min(len(normalized_chunk), 80)]
+    if len(probe) < 20:
+        return None
+
+    for page in pages:
+        page_text = normalize_for_page_match(str(page["text"]))
+        if probe in page_text:
+            return int(page["page_number"])
+    return None
+
+
 def process_pdf_document(db: Session, document: Document) -> None:
     document.status = "processing"
     document.parse_status = "processing"
-    document.progress_stage = "extract_pdf_text"
+    document.progress_stage = "docling_extract_pdf"
     document.error_message = None
     db.commit()
 
     try:
-        pages = extract_pdf_pages(Path(document.storage_path))
-        raw_parts: list[str] = []
+        path = Path(document.storage_path)
+        parser_name = "docling"
+        try:
+            structured_text = extract_pdf_with_docling(path)
+        except Exception:
+            pages = extract_pdf_pages(path)
+            structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+            parser_name = "pymupdf"
+        else:
+            try:
+                pages = extract_pdf_pages(path)
+            except Exception:
+                pages = []
+
         db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         chunk_index = 0
-        for page in pages:
-            page_number = int(page["page_number"])
-            page_text = str(page["text"])
-            raw_parts.append(f"第 {page_number} 页\n{page_text}")
-            for page_chunk_index, chunk_text in enumerate(split_text_to_chunks(page_text), start=1):
-                db.add(
-                    DocumentChunk(
-                        document_id=document.id,
-                        course_id=document.course_id,
-                        chunk_text=chunk_text,
-                        page_number=page_number,
-                        start_time=None,
-                        end_time=None,
-                        section_title=f"第 {page_number} 页片段 {page_chunk_index}",
-                        source_url=None,
-                        metadata_json=json.dumps(
-                            {
-                                "resource_title": document.filename,
-                                "source_type": "pdf",
-                                "page_number": page_number,
-                            },
-                            ensure_ascii=False,
-                        ),
-                        token_count=len(chunk_text),
-                        chunk_index=chunk_index,
-                        embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-                    )
-                )
-                chunk_index += 1
+        chunks = split_text_to_chunks(structured_text)
+        if not chunks:
+            raise RuntimeError("PDF 没有切分出可用片段。")
 
-        document.raw_content = "\n\n".join(raw_parts)
+        for chunk_text in chunks:
+            page_number = find_chunk_page_number(chunk_text, pages)
+            section_title = f"第 {page_number} 页片段" if page_number else f"Docling 结构化片段 {chunk_index + 1}"
+            metadata = {
+                "resource_title": document.filename,
+                "source_type": "pdf",
+                "parser": parser_name,
+            }
+            if page_number:
+                metadata["page_number"] = page_number
+
+            db.add(
+                DocumentChunk(
+                    document_id=document.id,
+                    course_id=document.course_id,
+                    chunk_text=chunk_text,
+                    page_number=page_number,
+                    start_time=None,
+                    end_time=None,
+                    section_title=section_title,
+                    source_url=None,
+                    metadata_json=json.dumps(metadata, ensure_ascii=False),
+                    token_count=len(chunk_text),
+                    chunk_index=chunk_index,
+                    embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
+                )
+            )
+            chunk_index += 1
+
+        document.raw_content = structured_text
         document.status = "ready"
         document.parse_status = "ready"
-        document.progress_stage = f"completed:{chunk_index} chunks"
+        document.progress_stage = f"completed:{chunk_index} chunks:{parser_name}"
         db.commit()
     except Exception as exc:
         document.status = "failed"
