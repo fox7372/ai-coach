@@ -1293,6 +1293,8 @@ function ProfilePanel({ profile }: { profile: Profile | null }) {
 }
 
 function UploadView({ userId, courses, onCoursesChanged }: { userId: number; courses: Course[]; onCoursesChanged: () => Promise<void> }) {
+  const [targetMode, setTargetMode] = useState<'existing' | 'new'>('existing')
+  const [selectedCourseId, setSelectedCourseId] = useState<number | ''>(courses[0]?.id || '')
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
   const [fileName, setFileName] = useState('')
@@ -1305,10 +1307,34 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
   const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
 
-  async function createCourseForResource(name: string, description: string) {
+  useEffect(() => {
+    if (courses.length && !courses.some((course) => course.id === Number(selectedCourseId))) {
+      setSelectedCourseId(courses[0].id)
+    }
+    if (!courses.length) {
+      setTargetMode('new')
+      setSelectedCourseId('')
+    }
+  }, [courses, selectedCourseId])
+
+  function getSelectedCourse() {
+    return courses.find((course) => course.id === Number(selectedCourseId)) || null
+  }
+
+  async function resolveCourseForResource(fallbackName: string, description: string) {
+    if (targetMode === 'existing') {
+      const selected = getSelectedCourse()
+      if (!selected) {
+        throw new Error('请先选择要加入的已有课程，或切换为新建课程。')
+      }
+      return { course: selected, created: false }
+    }
+
+    const name = courseName.trim() || fallbackName
     const existing = courses.find((course) => course.name === name)
+    if (existing) return { course: existing, created: false }
     const course = (await http.post('/courses', { user_id: userId, name, description })) as unknown as Course
-    return { course, created: !existing }
+    return { course, created: true }
   }
 
   async function cleanupCourse(course: Course, created: boolean) {
@@ -1330,23 +1356,23 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     const isPresentation = suffix === 'ppt' || suffix === 'pptx'
     const parser = isPresentation ? 'docling' : fileParser
     setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : parser === 'pymupdf' ? '正在快速解析 PDF...' : '正在用 Docling 结构化解析 PDF，可能较慢...')
-    const finalName = courseName.trim() || file.name.replace(/\.[^.]+$/, '') || '未命名课程'
+    const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
     formData.append('file', file)
     let createdCourse: Course | null = null
     let created = false
     try {
-      const result = await createCourseForResource(finalName, `由资料 ${file.name} 自动创建`)
+      const result = await resolveCourseForResource(finalName, `由资料 ${file.name} 自动创建`)
       createdCourse = result.course
       created = result.created
       const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: 180000 }) as unknown as { chunk_count: number; message?: string }
       setStatus('success')
-      setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 上传成功，生成 ${uploadResult.chunk_count} 个知识片段，课程已保留：${createdCourse.name}`)
+      setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 已加入《${createdCourse.name}》，生成 ${uploadResult.chunk_count} 个知识片段。`)
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
-      setMessage(error?.response?.data?.detail || '资料上传失败，已清理本次新建课程。')
+      setMessage(error?.response?.data?.detail || error?.message || '资料上传失败，已清理本次新建课程。')
     }
   }
 
@@ -1359,11 +1385,11 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
     setStatus('loading')
     setMessage(`正在导入 ${urls.length} 个视频...`)
-    const finalName = courseName.trim() || '在线视频课程'
+    const finalName = '在线视频课程'
     let createdCourse: Course | null = null
     let created = false
     try {
-      const result = await createCourseForResource(finalName, `由在线视频资料自动创建：${urls[0]}`)
+      const result = await resolveCourseForResource(finalName, `由在线视频资料自动创建：${urls[0]}`)
       createdCourse = result.course
       created = result.created
       const response = urls.length === 1
@@ -1390,13 +1416,13 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
           return
         }
         setStatus('success')
-        setMessage(`视频导入成功，生成 ${response.chunk_count} 个知识片段。`)
+        setMessage(`视频已加入《${createdCourse.name}》，生成 ${response.chunk_count} 个知识片段。`)
       }
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
-      setMessage(error?.response?.data?.detail || '视频导入失败，已清理本次新建课程。')
+      setMessage(error?.response?.data?.detail || error?.message || '视频导入失败，已清理本次新建课程。')
     }
   }
 
@@ -1404,11 +1430,11 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     if (!webUrl.trim()) return
     setStatus('loading')
     setMessage('正在提取网页并构建知识库...')
-    const finalName = courseName.trim() || '网页资料课程'
+    const finalName = '网页资料课程'
     let createdCourse: Course | null = null
     let created = false
     try {
-      const result = await createCourseForResource(finalName, `由网页资料自动创建：${webUrl}`)
+      const result = await resolveCourseForResource(finalName, `由网页资料自动创建：${webUrl}`)
       createdCourse = result.course
       created = result.created
       const resource = (await http.post(`/api/courses/${createdCourse.id}/resources/webpage`, { url: webUrl, priority: 3 })) as unknown as Resource
@@ -1420,16 +1446,21 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         return
       }
       setStatus('success')
-      setMessage(`网页导入成功：${resource.title}，生成 ${resource.chunk_count} 个知识片段。`)
+      setMessage(`网页已加入《${createdCourse.name}》：${resource.title}，生成 ${resource.chunk_count} 个知识片段。`)
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
-      setMessage(error?.response?.data?.detail || '网页导入失败，已清理本次新建课程。')
+      setMessage(error?.response?.data?.detail || error?.message || '网页导入失败，已清理本次新建课程。')
     }
   }
 
   async function createCourseWithAiResources() {
+    if (targetMode !== 'new') {
+      setStatus('error')
+      setMessage('无资料 AI 推荐会创建新课程，请先切换到“新建课程”。')
+      return
+    }
     const finalName = courseName.trim()
     if (!finalName) {
       setStatus('error')
@@ -1498,7 +1529,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         <div>
           <p className="text-sm font-medium text-emerald-700">资料入口</p>
           <h2 className="mt-1 text-3xl font-semibold text-slate-950">上传/导入资料</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">可以先用 AI 推荐资料创建课程，也可以直接上传 PDF、导入视频或网页。已有课程同名时会加入原课程。</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">先选择加入已有课程，或切换为新建课程，再上传 PDF/PPT、导入视频或网页。</p>
         </div>
         <div className={`rounded-2xl border px-4 py-3 text-sm ${statusClass(status)}`}>
           {status === 'loading' ? '处理中' : status === 'success' ? '最近成功' : status === 'error' ? '需要处理' : '等待导入'}
@@ -1507,10 +1538,34 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       <div className="mt-6 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
         <div className="grid gap-5">
           <Panel className="bg-white/92">
-            <label className="block text-sm font-medium">
-              课程名称
-              <input value={courseName} onChange={(event) => setCourseName(event.target.value)} placeholder="不填则使用资料名称" className="input-surface mt-2 w-full px-3 py-2.5 outline-none" />
-            </label>
+            <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+              <div>
+                <p className="text-sm font-medium text-slate-800">资料加入到</p>
+                <div className="mt-2 grid grid-cols-2 rounded-2xl bg-slate-100 p-1 text-sm font-semibold">
+                  <button type="button" onClick={() => setTargetMode('existing')} className={`rounded-xl px-3 py-2 ${targetMode === 'existing' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500'}`}>
+                    已有课程
+                  </button>
+                  <button type="button" onClick={() => setTargetMode('new')} className={`rounded-xl px-3 py-2 ${targetMode === 'new' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500'}`}>
+                    新建课程
+                  </button>
+                </div>
+              </div>
+              {targetMode === 'existing' ? (
+                <label className="block text-sm font-medium">
+                  选择课程
+                  <select value={selectedCourseId} onChange={(event) => setSelectedCourseId(Number(event.target.value) || '')} className="input-surface mt-2 w-full px-3 py-2.5 outline-none">
+                    {courses.length ? courses.map((course) => (
+                      <option key={course.id} value={course.id}>{course.name}</option>
+                    )) : <option value="">暂无课程，请先新建课程</option>}
+                  </select>
+                </label>
+              ) : (
+                <label className="block text-sm font-medium">
+                  新课程名称
+                  <input value={courseName} onChange={(event) => setCourseName(event.target.value)} placeholder="不填则使用资料名称" className="input-surface mt-2 w-full px-3 py-2.5 outline-none" />
+                </label>
+              )}
+            </div>
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">
