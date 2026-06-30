@@ -54,12 +54,16 @@ class AIService:
             user_content = f"课程资料片段：\n{context}\n\n学生问题：\n{question}"
         return self.generate_text(system_prompt, user_content)
 
-    def generate_text(self, system_prompt: str, user_content: str) -> str:
+    def generate_text(self, system_prompt: str, user_content: str, temperature: float | None = None) -> str:
         if not self.client:
             return (
                 "当前还没有配置 DEEPSEEK_API_KEY，所以先返回演示结果。\n\n"
                 f"任务内容：{user_content[:500]}"
             )
+
+        request_kwargs = {}
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
 
         response = self.client.chat.completions.create(
             model=settings.deepseek_model,
@@ -68,6 +72,7 @@ class AIService:
                 {"role": "user", "content": user_content},
             ],
             stream=False,
+            **request_kwargs,
         )
         answer = response.choices[0].message.content or "DeepSeek 没有返回有效内容。"
         return repair_mojibake(answer)

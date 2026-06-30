@@ -467,11 +467,11 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
   if (!course) return <Panel>请先成功导入资料生成课程。</Panel>
   const activeCourse = course
 
-  async function generateCourseKnowledge() {
+  async function generateCourseKnowledge(force = false) {
     setLoading(true)
     try {
-      await http.post('/api/ai/extract-knowledge-points', { user_id: userId, course_id: activeCourse.id })
-      setNotice('已根据课程资料生成知识点。')
+      const result = (await http.post('/api/ai/extract-knowledge-points', { user_id: userId, course_id: activeCourse.id, force })) as unknown as { message?: string; reused?: boolean }
+      setNotice(result.message || (result.reused ? '已显示已有知识点。' : '已根据课程资料生成知识点。'))
       await loadDetail()
     } finally {
       setLoading(false)
@@ -685,11 +685,26 @@ function ResourcesPanel({ courseId, resources, onChanged }: { courseId: number; 
     setBusyId(resourceId)
     setMessage('')
     try {
-      await http.post('/api/ai/extract-knowledge-points', { course_id: courseId, document_id: resourceId })
-      setMessage('已只根据这份资料生成知识点。')
+      const result = (await http.post('/api/ai/extract-knowledge-points', { course_id: courseId, document_id: resourceId })) as unknown as { message?: string; reused?: boolean }
+      setMessage(result.message || (result.reused ? '已存在这份资料的知识点。' : '已只根据这份资料生成知识点。'))
       await onChanged()
     } catch (error: any) {
       setMessage(error?.response?.data?.detail || '生成知识点失败。')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function regenerateFromResource(resourceId: number) {
+    if (!window.confirm('重新生成会删除这份资料已有知识点并覆盖为新结果，确定继续吗？')) return
+    setBusyId(resourceId)
+    setMessage('')
+    try {
+      const result = (await http.post('/api/ai/extract-knowledge-points', { course_id: courseId, document_id: resourceId, force: true })) as unknown as { message?: string }
+      setMessage(result.message || '已重新生成这份资料的知识点。')
+      await onChanged()
+    } catch (error: any) {
+      setMessage(error?.response?.data?.detail || '重新生成知识点失败。')
     } finally {
       setBusyId(null)
     }
@@ -715,7 +730,10 @@ function ResourcesPanel({ courseId, resources, onChanged }: { courseId: number; 
               </div>
               <div className="flex flex-wrap justify-end gap-2">
                 <button onClick={() => void generateFromResource(item.id)} disabled={busyId === item.id || item.status !== 'ready'} className="rounded-md border border-emerald-200 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-400">
-                  {busyId === item.id ? <Loader2 className="animate-spin" size={16} /> : '生成知识点'}
+                  {busyId === item.id ? <Loader2 className="animate-spin" size={16} /> : '生成/查看'}
+                </button>
+                <button onClick={() => void regenerateFromResource(item.id)} disabled={busyId === item.id || item.status !== 'ready'} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-400">
+                  重生成
                 </button>
                 <button onClick={() => void deleteResource(item.id)} disabled={busyId === item.id} className="rounded-md p-2 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400" title="删除资料">
                   {busyId === item.id ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
@@ -735,15 +753,28 @@ function ResourcesPanel({ courseId, resources, onChanged }: { courseId: number; 
   )
 }
 
-function KnowledgePanel({ items, loading, onGenerate }: { items: KnowledgePoint[]; loading: boolean; onGenerate: () => Promise<void> }) {
+function KnowledgePanel({ items, loading, onGenerate }: { items: KnowledgePoint[]; loading: boolean; onGenerate: (force?: boolean) => Promise<void> }) {
+  function regenerate() {
+    if (!items.length || window.confirm('重新生成会删除当前课程已有知识点并覆盖为新结果，确定继续吗？')) {
+      void onGenerate(true)
+    }
+  }
+
   return (
     <Panel>
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="font-semibold">知识点</h3>
-          <p className="mt-1 text-sm text-slate-500">知识点会保留来源位置和可信度，方便回到资料核对。</p>
+          <p className="mt-1 text-sm text-slate-500">已有知识点会直接复用；只有点击重新生成才会覆盖，避免每次结果变化。</p>
         </div>
-        <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">按课程生成</button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button onClick={() => void onGenerate(false)} disabled={loading} className="rounded-md border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:text-slate-400">
+            {items.length ? '查看已有' : '按课程生成'}
+          </button>
+          <button onClick={regenerate} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">
+            {loading ? '生成中...' : '重新生成'}
+          </button>
+        </div>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {items.map((item) => (

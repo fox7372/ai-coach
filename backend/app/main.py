@@ -169,6 +169,7 @@ class CourseTaskRequest(BaseModel):
     course_id: int = 1
     document_id: int | None = None
     text: str | None = None
+    force: bool = False
 
 
 class QuizGenerateRequest(CourseTaskRequest):
@@ -1937,6 +1938,7 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
     course_name = get_course_name(db, payload.course_id)
     source_document = None
     chunks: list[DocumentChunk] = []
+    existing_query = select(KnowledgePoint).where(KnowledgePoint.course_id == payload.course_id)
     if payload.document_id is not None:
         source_document = db.scalar(
             select(Document).where(
@@ -1946,6 +1948,28 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         )
         if source_document is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在或不属于当前课程")
+        existing_query = existing_query.where(KnowledgePoint.source_document == source_document.filename)
+        existing_points = db.scalars(existing_query.order_by(KnowledgePoint.id)).all()
+        if existing_points and not payload.force:
+            return {
+                "course_id": payload.course_id,
+                "document_id": payload.document_id,
+                "reused": True,
+                "message": "已存在这份资料的知识点，未重复生成。如需覆盖，请使用重新生成。",
+                "knowledge_points": [
+                    {
+                        "id": point.id,
+                        "name": point.name,
+                        "description": point.description,
+                        "source_document": point.source_document,
+                        "source_page": point.source_page,
+                        "source_excerpt": point.source_excerpt,
+                        "confidence": point.confidence,
+                    }
+                    for point in existing_points
+                ],
+                "raw": "",
+            }
         all_chunks = db.scalars(
             select(DocumentChunk)
             .where(DocumentChunk.document_id == payload.document_id, DocumentChunk.course_id == payload.course_id)
@@ -1969,11 +1993,33 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         context = "\n\n".join(chunk.chunk_text for chunk in chunks) if chunks else get_course_context(db, payload.course_id, payload.text)
         source_chunk = chunks[0] if chunks else None
         source_document = db.get(Document, source_chunk.document_id) if source_chunk else None
+        existing_points = db.scalars(existing_query.order_by(KnowledgePoint.id)).all()
+        if existing_points and not payload.force:
+            return {
+                "course_id": payload.course_id,
+                "document_id": payload.document_id,
+                "reused": True,
+                "message": "已存在课程知识点，未重复生成。如需覆盖，请使用重新生成。",
+                "knowledge_points": [
+                    {
+                        "id": point.id,
+                        "name": point.name,
+                        "description": point.description,
+                        "source_document": point.source_document,
+                        "source_page": point.source_page,
+                        "source_excerpt": point.source_excerpt,
+                        "confidence": point.confidence,
+                    }
+                    for point in existing_points
+                ],
+                "raw": "",
+            }
 
     result = ai_service.generate_text(
         (
-            "你是教学知识图谱助手。请只根据给定资料提取 5 到 8 个学科知识点。"
+            "你是教学知识图谱助手。请只根据给定资料提取 8 个学科知识点。"
             "只保留资料原文中明确出现的课程内容概念。"
+            "如果资料内容不足 8 个，只输出资料能明确支持的知识点，不要编造。"
             "知识点名称必须使用中文或课程中常用的技术缩写，不能用书名、章节标题、页眉、页脚、英文教材名或任务字段。"
             "不要提取课时、地点、成绩构成、DDL、直播、教材链接、课程安排等事务信息。"
             "不要输出“资料”“任务内容”“Computer Networking”“Security”“本章目标”等非知识点。"
@@ -1982,6 +2028,7 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
             'JSON 格式：[{"name":"知识点名","description":"一句话说明"}]。'
         ),
         f"课程：{course_name}\n资料：{source_document.filename if source_document else '课程资料'}\n资料内容：\n{context}",
+        temperature=0,
     )
     if payload.document_id is not None and source_document is not None:
         old_point_ids = db.scalars(
@@ -1999,7 +2046,7 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         db.execute(delete(MasteryRecord).where(MasteryRecord.knowledge_point_id.in_(old_point_ids)))
         db.execute(delete(KnowledgePoint).where(KnowledgePoint.id.in_(old_point_ids)))
 
-    parsed_points = parse_knowledge_point_result(result)
+    parsed_points = parse_knowledge_point_result(result)[:8]
     created = []
     for item in parsed_points:
         name = item["name"].strip()[:100]
@@ -2029,6 +2076,8 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
     return {
         "course_id": payload.course_id,
         "document_id": payload.document_id,
+        "reused": False,
+        "message": "知识点已重新生成并保存。" if payload.force else "知识点已生成并保存。",
         "knowledge_points": [
             {
                 "id": point.id,
