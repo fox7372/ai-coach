@@ -835,7 +835,7 @@ def extract_pdf_pages(path: Path) -> list[dict[str, object]]:
     return pages
 
 
-def extract_pdf_with_docling(path: Path) -> str:
+def extract_document_with_docling(path: Path, input_format: object | None = None) -> str:
     try:
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -847,16 +847,19 @@ def extract_pdf_with_docling(path: Path) -> str:
     pipeline_options = PdfPipelineOptions()
     pipeline_options.document_timeout = 90
     pipeline_options.do_ocr = False
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
-        }
-    )
+    format_options = {}
+    if input_format is None or input_format == InputFormat.PDF:
+        format_options[InputFormat.PDF] = PdfFormatOption(pipeline_options=pipeline_options)
+    converter = DocumentConverter(format_options=format_options)
     result = converter.convert(str(path))
     markdown = result.document.export_to_markdown().strip()
     if not markdown:
-        raise RuntimeError("Docling 没有从 PDF 提取到可用文本。")
+        raise RuntimeError("Docling 没有从资料中提取到可用文本。")
     return markdown
+
+
+def extract_pdf_with_docling(path: Path) -> str:
+    return extract_document_with_docling(path)
 
 
 def find_chunk_page_number(chunk_text: str, pages: list[dict[str, object]]) -> int | None:
@@ -875,67 +878,112 @@ def find_chunk_page_number(chunk_text: str, pages: list[dict[str, object]]) -> i
     return None
 
 
-def process_pdf_document(db: Session, document: Document) -> None:
+def save_document_chunks(
+    db: Session,
+    document: Document,
+    structured_text: str,
+    parser_name: str,
+    source_type: str,
+    pages: list[dict[str, object]] | None = None,
+) -> int:
+    db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
+    chunk_index = 0
+    chunks = split_text_to_chunks(structured_text)
+    if not chunks:
+        raise RuntimeError("资料没有切分出可用片段。")
+
+    for chunk_text in chunks:
+        page_number = find_chunk_page_number(chunk_text, pages or []) if pages else None
+        if page_number:
+            section_title = f"第 {page_number} 页片段"
+        elif source_type == "presentation":
+            section_title = f"Docling 演示文稿片段 {chunk_index + 1}"
+        else:
+            section_title = f"Docling 结构化片段 {chunk_index + 1}"
+        metadata = {
+            "resource_title": document.filename,
+            "source_type": source_type,
+            "parser": parser_name,
+        }
+        if page_number:
+            metadata["page_number"] = page_number
+
+        db.add(
+            DocumentChunk(
+                document_id=document.id,
+                course_id=document.course_id,
+                chunk_text=chunk_text,
+                page_number=page_number,
+                start_time=None,
+                end_time=None,
+                section_title=section_title,
+                source_url=None,
+                metadata_json=json.dumps(metadata, ensure_ascii=False),
+                token_count=len(chunk_text),
+                chunk_index=chunk_index,
+                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
+            )
+        )
+        chunk_index += 1
+    return chunk_index
+
+
+def process_pdf_document(db: Session, document: Document, parser: str = "docling") -> None:
     document.status = "processing"
     document.parse_status = "processing"
-    document.progress_stage = "docling_extract_pdf"
+    document.progress_stage = "pymupdf_extract_pdf" if parser == "pymupdf" else "docling_extract_pdf"
     document.error_message = None
     db.commit()
 
     try:
         path = Path(document.storage_path)
-        parser_name = "docling"
-        try:
-            structured_text = extract_pdf_with_docling(path)
-        except Exception:
+        pages: list[dict[str, object]] = []
+        parser_name = parser if parser in {"docling", "pymupdf"} else "docling"
+        if parser_name == "pymupdf":
             pages = extract_pdf_pages(path)
             structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
-            parser_name = "pymupdf"
         else:
             try:
-                pages = extract_pdf_pages(path)
+                structured_text = extract_pdf_with_docling(path)
             except Exception:
-                pages = []
+                pages = extract_pdf_pages(path)
+                structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+                parser_name = "pymupdf"
+            else:
+                try:
+                    pages = extract_pdf_pages(path)
+                except Exception:
+                    pages = []
 
-        db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-        chunk_index = 0
-        chunks = split_text_to_chunks(structured_text)
-        if not chunks:
-            raise RuntimeError("PDF 没有切分出可用片段。")
-
-        for chunk_text in chunks:
-            page_number = find_chunk_page_number(chunk_text, pages)
-            section_title = f"第 {page_number} 页片段" if page_number else f"Docling 结构化片段 {chunk_index + 1}"
-            metadata = {
-                "resource_title": document.filename,
-                "source_type": "pdf",
-                "parser": parser_name,
-            }
-            if page_number:
-                metadata["page_number"] = page_number
-
-            db.add(
-                DocumentChunk(
-                    document_id=document.id,
-                    course_id=document.course_id,
-                    chunk_text=chunk_text,
-                    page_number=page_number,
-                    start_time=None,
-                    end_time=None,
-                    section_title=section_title,
-                    source_url=None,
-                    metadata_json=json.dumps(metadata, ensure_ascii=False),
-                    token_count=len(chunk_text),
-                    chunk_index=chunk_index,
-                    embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-                )
-            )
-            chunk_index += 1
+        chunk_index = save_document_chunks(db, document, structured_text, parser_name, "pdf", pages)
 
         document.raw_content = structured_text
         document.status = "ready"
         document.parse_status = "ready"
         document.progress_stage = f"completed:{chunk_index} chunks:{parser_name}"
+        db.commit()
+    except Exception as exc:
+        document.status = "failed"
+        document.parse_status = "failed"
+        document.progress_stage = "failed"
+        document.error_message = clean_error_message(exc)
+        db.commit()
+
+
+def process_presentation_document(db: Session, document: Document) -> None:
+    document.status = "processing"
+    document.parse_status = "processing"
+    document.progress_stage = "docling_extract_presentation"
+    document.error_message = None
+    db.commit()
+
+    try:
+        structured_text = extract_document_with_docling(Path(document.storage_path))
+        chunk_count = save_document_chunks(db, document, structured_text, "docling", "presentation")
+        document.raw_content = structured_text
+        document.status = "ready"
+        document.parse_status = "ready"
+        document.progress_stage = f"completed:{chunk_count} chunks:docling"
         db.commit()
     except Exception as exc:
         document.status = "failed"
@@ -1458,11 +1506,15 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
 @app.post("/documents/upload")
 async def upload_document(
     course_id: int = 1,
+    parser: Literal["pymupdf", "docling"] = "docling",
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
     filename = file.filename or "document.pdf"
+    file_type = suffix.lstrip(".").lower()
+    if file_type not in {"pdf", "ppt", "pptx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持 PDF、PPT、PPTX 资料上传")
     exists = db.scalar(select(Document).where(Document.course_id == course_id, Document.filename == filename))
     if exists is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该课程已经上传过同名文件，请不要重复上传")
@@ -1474,7 +1526,7 @@ async def upload_document(
     document = Document(
         course_id=course_id,
         filename=filename,
-        file_type=suffix.lstrip("."),
+        file_type=file_type,
         storage_path=str(target),
         parse_status="processing",
     )
@@ -1483,7 +1535,10 @@ async def upload_document(
     db.refresh(document)
 
     if document.file_type.lower() == "pdf":
-        process_pdf_document(db, document)
+        process_pdf_document(db, document, parser)
+        db.refresh(document)
+    elif document.file_type.lower() in {"ppt", "pptx"}:
+        process_presentation_document(db, document)
         db.refresh(document)
     else:
         document.status = "uploaded"
@@ -1498,7 +1553,8 @@ async def upload_document(
         "filename": document.filename,
         "status": document.parse_status,
         "chunk_count": int(chunk_count),
-        "message": "PDF 已解析并写入 RAG 切块。" if chunk_count else document.error_message or "文件已保存，但没有生成 RAG 切块。",
+        "parser": document.progress_stage,
+        "message": "资料已解析并写入 RAG 切块。" if chunk_count else document.error_message or "文件已保存，但没有生成 RAG 切块。",
     }
 
 
@@ -1830,10 +1886,12 @@ def retry_resource(resource_id: int, db: Session = Depends(get_db)) -> ResourceO
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
     if document.file_type == "pdf":
         process_pdf_document(db, document)
+    elif document.file_type in {"ppt", "pptx"}:
+        process_presentation_document(db, document)
     elif document.source_type == "video":
         process_video_document(db, document, document.language or "zh", False)
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF 或视频资料")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF、PPT/PPTX 或视频资料")
     db.refresh(document)
     return document_to_resource(db, document)
 

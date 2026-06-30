@@ -1296,6 +1296,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
   const [fileName, setFileName] = useState('')
+  const [fileParser, setFileParser] = useState<'pymupdf' | 'docling'>('pymupdf')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
@@ -1320,12 +1321,15 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
   }
 
-  async function uploadPdf(event: React.ChangeEvent<HTMLInputElement>) {
+  async function uploadFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
     setFileName(file.name)
     setStatus('loading')
-    setMessage('正在上传 PDF...')
+    const suffix = file.name.split('.').pop()?.toLowerCase() || ''
+    const isPresentation = suffix === 'ppt' || suffix === 'pptx'
+    const parser = isPresentation ? 'docling' : fileParser
+    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : parser === 'pymupdf' ? '正在快速解析 PDF...' : '正在用 Docling 结构化解析 PDF，可能较慢...')
     const finalName = courseName.trim() || file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
     formData.append('file', file)
@@ -1335,14 +1339,14 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       const result = await createCourseForResource(finalName, `由资料 ${file.name} 自动创建`)
       createdCourse = result.course
       created = result.created
-      await http.post(`/documents/upload?course_id=${createdCourse.id}`, formData)
+      const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: 180000 }) as unknown as { chunk_count: number; message?: string }
       setStatus('success')
-      setMessage(`PDF 上传成功，课程已保留：${createdCourse.name}`)
+      setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 上传成功，生成 ${uploadResult.chunk_count} 个知识片段，课程已保留：${createdCourse.name}`)
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
-      setMessage(error?.response?.data?.detail || 'PDF 上传失败，已清理本次新建课程。')
+      setMessage(error?.response?.data?.detail || '资料上传失败，已清理本次新建课程。')
     }
   }
 
@@ -1570,16 +1574,34 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
             <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><FileText /></div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-950">上传 PDF</h3>
-                <p className="text-sm text-slate-500">上传成功后才会生成或保留课程。</p>
+                <h3 className="text-lg font-semibold text-slate-950">上传 PDF / PPT</h3>
+                <p className="text-sm text-slate-500">上传成功后才会生成或保留课程。PPT/PPTX 使用 Docling 解析。</p>
               </div>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setFileParser('pymupdf')}
+                className={`rounded-2xl border p-3 text-left transition ${fileParser === 'pymupdf' ? 'border-emerald-400 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-200'}`}
+              >
+                <span className="text-sm font-semibold">快速解析 PyMuPDF</span>
+                <span className="mt-1 block text-xs leading-5">速度快，适合普通文字 PDF；结构、表格和阅读顺序相对粗略。</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFileParser('docling')}
+                className={`rounded-2xl border p-3 text-left transition ${fileParser === 'docling' ? 'border-emerald-400 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-200'}`}
+              >
+                <span className="text-sm font-semibold">结构化解析 Docling</span>
+                <span className="mt-1 block text-xs leading-5">会很慢，但更适合教材、表格和复杂版面；PPT/PPTX 默认使用它。</span>
+              </button>
             </div>
             <label className="primary-action mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold">
               <FileUp size={16} />
               选择文件
-              <input type="file" accept=".pdf" className="hidden" onChange={uploadPdf} />
+              <input type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={uploadFile} />
             </label>
-            <p className="mt-2 text-sm text-slate-500">{fileName || '尚未选择文件'}</p>
+            <p className="mt-2 text-sm text-slate-500">{fileName || '尚未选择文件，支持 PDF、PPT、PPTX'}</p>
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">
