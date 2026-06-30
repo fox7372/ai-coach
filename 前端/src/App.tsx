@@ -1329,7 +1329,6 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
   const [fileName, setFileName] = useState('')
-  const [fileParser, setFileParser] = useState<'pymupdf' | 'docling'>('pymupdf')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
@@ -1386,9 +1385,9 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     setStatus('loading')
     const suffix = file.name.split('.').pop()?.toLowerCase() || ''
     const isPresentation = suffix === 'ppt' || suffix === 'pptx'
-    const parser = isPresentation ? 'docling' : fileParser
+    const parser = isPresentation ? 'docling' : 'pymupdf'
     setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
-    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : parser === 'pymupdf' ? '正在快速解析 PDF...' : '正在用 Docling 结构化解析 PDF，可能较慢...')
+    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : '正在用 PyMuPDF 快速解析 PDF...')
     const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
     formData.append('file', file)
@@ -1685,23 +1684,9 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
                 <p className="text-sm text-slate-500">上传成功后才会生成或保留课程。PPT/PPTX 使用 Docling 解析。</p>
               </div>
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => setFileParser('pymupdf')}
-                className={`rounded-2xl border p-3 text-left transition ${fileParser === 'pymupdf' ? 'border-emerald-400 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-200'}`}
-              >
-                <span className="text-sm font-semibold">快速解析 PyMuPDF</span>
-                <span className="mt-1 block text-xs leading-5">速度快，适合普通文字 PDF；结构、表格和阅读顺序相对粗略。</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFileParser('docling')}
-                className={`rounded-2xl border p-3 text-left transition ${fileParser === 'docling' ? 'border-emerald-400 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-200'}`}
-              >
-                <span className="text-sm font-semibold">结构化解析 Docling</span>
-                <span className="mt-1 block text-xs leading-5">会很慢，但更适合教材、表格和复杂版面；PPT/PPTX 默认使用它。</span>
-              </button>
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <p className="font-semibold">PDF 使用 PyMuPDF 快速解析</p>
+              <p className="mt-1 text-xs leading-5 text-emerald-800">适合当前 RAG 问答和知识点生成；Docling PDF 入口已关闭，避免上传后长时间卡住。PPT/PPTX 仍使用 Docling。</p>
             </div>
             <label className="primary-action mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold">
               <FileUp size={16} />

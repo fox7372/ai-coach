@@ -928,7 +928,7 @@ def save_document_chunks(
     return chunk_index
 
 
-def process_pdf_document(db: Session, document: Document, parser: str = "docling") -> None:
+def process_pdf_document(db: Session, document: Document, parser: str = "pymupdf") -> None:
     document.status = "processing"
     document.parse_status = "processing"
     document.progress_stage = "pymupdf_extract_pdf" if parser == "pymupdf" else "docling_extract_pdf"
@@ -1506,7 +1506,7 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
 @app.post("/documents/upload")
 async def upload_document(
     course_id: int = 1,
-    parser: Literal["pymupdf", "docling"] = "docling",
+    parser: Literal["pymupdf", "docling"] = "pymupdf",
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
