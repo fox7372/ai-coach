@@ -764,6 +764,78 @@ def split_text_to_chunks(text_value: str, target_chars: int = 1200, overlap_char
     return chunks
 
 
+def extract_pdf_pages(path: Path) -> list[dict[str, object]]:
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("后端缺少 PyMuPDF，请先安装 requirements.txt") from exc
+
+    pages: list[dict[str, object]] = []
+    with fitz.open(path) as pdf:
+        for page_index, page in enumerate(pdf, start=1):
+            text_value = page.get_text("text").strip()
+            if text_value:
+                pages.append({"page_number": page_index, "text": text_value})
+    if not pages:
+        raise RuntimeError("PDF 没有提取到可用文本，可能是扫描版图片 PDF，需要 OCR。")
+    return pages
+
+
+def process_pdf_document(db: Session, document: Document) -> None:
+    document.status = "processing"
+    document.parse_status = "processing"
+    document.progress_stage = "extract_pdf_text"
+    document.error_message = None
+    db.commit()
+
+    try:
+        pages = extract_pdf_pages(Path(document.storage_path))
+        raw_parts: list[str] = []
+        db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
+        chunk_index = 0
+        for page in pages:
+            page_number = int(page["page_number"])
+            page_text = str(page["text"])
+            raw_parts.append(f"第 {page_number} 页\n{page_text}")
+            for page_chunk_index, chunk_text in enumerate(split_text_to_chunks(page_text), start=1):
+                db.add(
+                    DocumentChunk(
+                        document_id=document.id,
+                        course_id=document.course_id,
+                        chunk_text=chunk_text,
+                        page_number=page_number,
+                        start_time=None,
+                        end_time=None,
+                        section_title=f"第 {page_number} 页片段 {page_chunk_index}",
+                        source_url=None,
+                        metadata_json=json.dumps(
+                            {
+                                "resource_title": document.filename,
+                                "source_type": "pdf",
+                                "page_number": page_number,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        token_count=len(chunk_text),
+                        chunk_index=chunk_index,
+                        embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
+                    )
+                )
+                chunk_index += 1
+
+        document.raw_content = "\n\n".join(raw_parts)
+        document.status = "ready"
+        document.parse_status = "ready"
+        document.progress_stage = f"completed:{chunk_index} chunks"
+        db.commit()
+    except Exception as exc:
+        document.status = "failed"
+        document.parse_status = "failed"
+        document.progress_stage = "failed"
+        document.error_message = clean_error_message(exc)
+        db.commit()
+
+
 def choose_subtitle_track(info: dict[str, object], preferred_language: str) -> tuple[str | None, str | None, str | None]:
     language_candidates = [preferred_language, "zh-CN", "zh-Hans", "zh", "en"]
     for subtitle_type, key in (("manual", "subtitles"), ("automatic", "automatic_captions")):
@@ -1279,7 +1351,7 @@ async def upload_document(
     course_id: int = 1,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-) -> dict[str, str]:
+) -> dict[str, object]:
     suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
     filename = file.filename or "document.pdf"
     exists = db.scalar(select(Document).where(Document.course_id == course_id, Document.filename == filename))
@@ -1301,11 +1373,23 @@ async def upload_document(
     db.commit()
     db.refresh(document)
 
+    if document.file_type.lower() == "pdf":
+        process_pdf_document(db, document)
+        db.refresh(document)
+    else:
+        document.status = "uploaded"
+        document.parse_status = "uploaded"
+        document.progress_stage = "saved_without_parser"
+        db.commit()
+        db.refresh(document)
+
+    chunk_count = db.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document.id)) or 0
     return {
         "document_id": str(document.id),
         "filename": document.filename,
         "status": document.parse_status,
-        "message": "文件已保存到数据库记录，下一步接入 PDF 解析、切块和 RAG 检索。",
+        "chunk_count": int(chunk_count),
+        "message": "PDF 已解析并写入 RAG 切块。" if chunk_count else document.error_message or "文件已保存，但没有生成 RAG 切块。",
     }
 
 
@@ -1635,9 +1719,12 @@ def retry_resource(resource_id: int, db: Session = Depends(get_db)) -> ResourceO
     document = db.get(Document, resource_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
-    if document.source_type != "video":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试视频资料")
-    process_video_document(db, document, document.language or "zh", False)
+    if document.file_type == "pdf":
+        process_pdf_document(db, document)
+    elif document.source_type == "video":
+        process_video_document(db, document, document.language or "zh", False)
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF 或视频资料")
     db.refresh(document)
     return document_to_resource(db, document)
 
