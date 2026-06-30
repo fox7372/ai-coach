@@ -20,16 +20,38 @@ if (!(Test-Path $DataDir)) {
 
 $PortOpen = Test-NetConnection 127.0.0.1 -Port 3306 -InformationLevel Quiet
 if (!$PortOpen) {
-  Remove-Item -LiteralPath (Join-Path $DataDir "undo_001"), (Join-Path $DataDir "undo_002") -Force -ErrorAction SilentlyContinue
+  $UndoFiles = @("undo_001", "undo_002", "undo_1_trunc.log", "undo_2_trunc.log")
+  $ExistingUndoFiles = $UndoFiles | ForEach-Object { Join-Path $DataDir $_ } | Where-Object { Test-Path $_ }
+  if ($ExistingUndoFiles.Count -gt 0) {
+    $UndoBackupDir = Join-Path $DataDir ("undo-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    New-Item -ItemType Directory -Path $UndoBackupDir | Out-Null
+    foreach ($UndoFile in $ExistingUndoFiles) {
+      Move-Item -LiteralPath $UndoFile -Destination (Join-Path $UndoBackupDir (Split-Path -Leaf $UndoFile))
+    }
+    Write-Host "Moved stale undo files to: $UndoBackupDir" -ForegroundColor Yellow
+  }
+
   Start-Process -FilePath $MySqlD -ArgumentList @(
     "--basedir=$MySqlBase",
     "--datadir=$DataDir",
-    "--innodb-undo-directory=$DataDir",
     "--port=3306",
     "--bind-address=127.0.0.1",
     "--console"
   ) -WindowStyle Hidden
-  Start-Sleep -Seconds 8
+
+  $Ready = $false
+  for ($i = 0; $i -lt 20; $i++) {
+    Start-Sleep -Seconds 1
+    if (Test-NetConnection 127.0.0.1 -Port 3306 -InformationLevel Quiet) {
+      $Ready = $true
+      break
+    }
+  }
+
+  if (!$Ready) {
+    Write-Host "MySQL did not start on 127.0.0.1:3306. Run mysqld with --console to inspect the startup error." -ForegroundColor Red
+    exit 1
+  }
 }
 
 & $MySql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS ai_learning DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;"
