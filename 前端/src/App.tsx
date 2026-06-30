@@ -122,6 +122,37 @@ function LoadingNotice({ text }: { text: string }) {
   )
 }
 
+function DoclingParsingNotice({ message }: { message: string }) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+      <div className="flex items-start gap-3">
+        <span className="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-amber-700 shadow-sm">
+          <span className="absolute h-9 w-9 animate-ping rounded-xl bg-amber-300 opacity-30" />
+          <Layers3 className="relative animate-pulse" size={19} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold">Docling 正在结构化解析</p>
+            <Loader2 className="animate-spin" size={15} />
+          </div>
+          <p className="mt-1 text-sm leading-6 text-amber-800">{message}</p>
+          <div className="mt-3 space-y-2">
+            {['读取页面结构', '识别标题和表格', '生成 RAG 知识片段'].map((step, index) => (
+              <div key={step} className="h-2 overflow-hidden rounded-full bg-white/80">
+                <div
+                  className="h-full w-1/2 animate-pulse rounded-full bg-amber-400"
+                  style={{ animationDelay: `${index * 180}ms` }}
+                />
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-amber-700">复杂 PDF 或 PPT 可能需要较长时间，请等待当前上传完成。</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [username, setUsername] = useState('demo')
@@ -1303,6 +1334,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
   const [message, setMessage] = useState('成功导入资料后才会生成或保留课程。')
+  const [activeImportKind, setActiveImportKind] = useState<'docling' | 'normal' | null>(null)
   const [lastResource, setLastResource] = useState<Resource | null>(null)
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
   const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
@@ -1355,6 +1387,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     const suffix = file.name.split('.').pop()?.toLowerCase() || ''
     const isPresentation = suffix === 'ppt' || suffix === 'pptx'
     const parser = isPresentation ? 'docling' : fileParser
+    setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
     setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : parser === 'pymupdf' ? '正在快速解析 PDF...' : '正在用 Docling 结构化解析 PDF，可能较慢...')
     const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
@@ -1367,11 +1400,13 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       created = result.created
       const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: 180000 }) as unknown as { chunk_count: number; message?: string }
       setStatus('success')
+      setActiveImportKind(null)
       setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 已加入《${createdCourse.name}》，生成 ${uploadResult.chunk_count} 个知识片段。`)
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
+      setActiveImportKind(null)
       setMessage(error?.response?.data?.detail || error?.message || '资料上传失败，已清理本次新建课程。')
     }
   }
@@ -1384,6 +1419,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       return
     }
     setStatus('loading')
+    setActiveImportKind('normal')
     setMessage(`正在导入 ${urls.length} 个视频...`)
     const finalName = '在线视频课程'
     let createdCourse: Course | null = null
@@ -1402,26 +1438,31 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         if (response.success_count === 0) {
           await cleanupCourse(createdCourse, created)
           setStatus('error')
+          setActiveImportKind(null)
           setMessage(response.results[0]?.error || '所有视频都导入失败，已清理本次新建课程。')
           return
         }
         setStatus('success')
+        setActiveImportKind(null)
         setMessage(`批量导入完成：成功 ${response.success_count} 个，失败 ${response.failed_count} 个。`)
       } else {
         setLastResource(response)
         if (response.status !== 'ready') {
           await cleanupCourse(createdCourse, created)
           setStatus('error')
+          setActiveImportKind(null)
           setMessage(response.error_message || '视频导入失败，已清理本次新建课程。')
           return
         }
         setStatus('success')
+        setActiveImportKind(null)
         setMessage(`视频已加入《${createdCourse.name}》，生成 ${response.chunk_count} 个知识片段。`)
       }
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
+      setActiveImportKind(null)
       setMessage(error?.response?.data?.detail || error?.message || '视频导入失败，已清理本次新建课程。')
     }
   }
@@ -1429,6 +1470,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   async function importWebpage() {
     if (!webUrl.trim()) return
     setStatus('loading')
+    setActiveImportKind('normal')
     setMessage('正在提取网页并构建知识库...')
     const finalName = '网页资料课程'
     let createdCourse: Course | null = null
@@ -1442,15 +1484,18 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       if (resource.status !== 'ready') {
         await cleanupCourse(createdCourse, created)
         setStatus('error')
+        setActiveImportKind(null)
         setMessage(resource.error_message || '网页导入失败，已清理本次新建课程。')
         return
       }
       setStatus('success')
+      setActiveImportKind(null)
       setMessage(`网页已加入《${createdCourse.name}》：${resource.title}，生成 ${resource.chunk_count} 个知识片段。`)
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
       setStatus('error')
+      setActiveImportKind(null)
       setMessage(error?.response?.data?.detail || error?.message || '网页导入失败，已清理本次新建课程。')
     }
   }
@@ -1468,6 +1513,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       return
     }
     setStatus('loading')
+    setActiveImportKind('normal')
     setMessage('AI 正在生成推荐资料清单...')
     setRecommendedResources([])
     try {
@@ -1484,10 +1530,12 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       setRecommendedResources(recommendation.resources)
       setRecommendedCourseId(createdCourse.id)
       setStatus('success')
+      setActiveImportKind(null)
       setMessage(`课程已创建：${finalName}。请按下方推荐清单继续上传 PDF、导入网页或视频。`)
       await onCoursesChanged()
     } catch (error: any) {
       setStatus('error')
+      setActiveImportKind(null)
       setMessage(error?.response?.data?.detail || '无资料课程创建失败，请检查 AI 设置或稍后重试。')
     }
   }
@@ -1504,21 +1552,25 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       return
     }
     setStatus('loading')
+    setActiveImportKind('normal')
     setMessage(`正在加入资料：${item.title}`)
     try {
       const resource = (await http.post(`/api/courses/${recommendedCourseId}/resources/webpage`, { url: item.url, priority: 3 })) as unknown as Resource
       setLastResource(resource)
       if (resource.status !== 'ready') {
         setStatus('error')
+        setActiveImportKind(null)
         setMessage(resource.error_message || '资料加入失败，请核对网址后重试。')
         return
       }
       setRecommendedResources((items) => items.filter((_, itemIndex) => itemIndex !== index))
       setStatus('success')
+      setActiveImportKind(null)
       setMessage(`已加入课程资料：${resource.title}`)
       await onCoursesChanged()
     } catch (error: any) {
       setStatus('error')
+      setActiveImportKind(null)
       setMessage(error?.response?.data?.detail || '资料加入失败，请核对网址后重试。')
     }
   }
@@ -1684,12 +1736,25 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         </div>
         <Panel className="h-fit xl:sticky xl:top-28">
           <h3 className="text-lg font-semibold text-slate-950">导入状态</h3>
-          <div className={`mt-4 rounded-2xl border p-4 ${statusClass(status)}`}>
-            <div className="flex gap-3">
-              {status === 'loading' ? <Loader2 className="animate-spin" /> : status === 'success' ? <CheckCircle2 /> : status === 'error' ? <AlertCircle /> : <FileText />}
-              <p className="text-sm">{message}</p>
-            </div>
+          <div className="mt-4">
+            {status === 'loading' && activeImportKind === 'docling' ? (
+              <DoclingParsingNotice message={message} />
+            ) : (
+              <div className={`rounded-2xl border p-4 ${statusClass(status)}`}>
+                <div className="flex gap-3">
+                  {status === 'loading' ? <Loader2 className="animate-spin" /> : status === 'success' ? <CheckCircle2 /> : status === 'error' ? <AlertCircle /> : <FileText />}
+                  <p className="text-sm">{message}</p>
+                </div>
+              </div>
+            )}
           </div>
+          {status === 'loading' && activeImportKind === 'docling' && (
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs text-slate-500">
+              <div className="rounded-xl bg-white px-2 py-2 shadow-sm">结构分析</div>
+              <div className="rounded-xl bg-white px-2 py-2 shadow-sm">内容抽取</div>
+              <div className="rounded-xl bg-white px-2 py-2 shadow-sm">写入知识库</div>
+            </div>
+          )}
           {lastResource && (
             <div className="soft-card mt-4 p-4 text-sm">
               <p className="font-semibold">{lastResource.title}</p>
