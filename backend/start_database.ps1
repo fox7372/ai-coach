@@ -8,6 +8,30 @@ $MySqlD = Join-Path $MySqlBase "bin\mysqld.exe"
 $MySql = Join-Path $MySqlBase "bin\mysql.exe"
 $DataDir = Join-Path $ProjectRoot ".mysql-data"
 
+function Test-DatabaseReady {
+  try {
+    & $MySql -h 127.0.0.1 -P 3306 -u root --connect-timeout=2 -e "SELECT 1;" 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
+  } catch {
+    return $false
+  }
+}
+
+function Backup-UndoFiles {
+  $UndoFiles = @("undo_001", "undo_002", "undo_1_trunc.log", "undo_2_trunc.log")
+  $ExistingUndoFiles = $UndoFiles | ForEach-Object { Join-Path $DataDir $_ } | Where-Object { Test-Path $_ }
+  if ($ExistingUndoFiles.Count -eq 0) {
+    return
+  }
+
+  $UndoBackupDir = Join-Path $DataDir ("undo-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+  New-Item -ItemType Directory -Path $UndoBackupDir | Out-Null
+  foreach ($UndoFile in $ExistingUndoFiles) {
+    Move-Item -LiteralPath $UndoFile -Destination (Join-Path $UndoBackupDir (Split-Path -Leaf $UndoFile))
+  }
+  Write-Host "Moved stale undo files to: $UndoBackupDir" -ForegroundColor Yellow
+}
+
 if (!(Test-Path $MySqlD)) {
   Write-Host "MySQL/MariaDB compatible server was not found at: $MySqlD" -ForegroundColor Red
   exit 1
@@ -15,41 +39,31 @@ if (!(Test-Path $MySqlD)) {
 
 if (!(Test-Path $DataDir)) {
   New-Item -ItemType Directory -Path $DataDir | Out-Null
-  & $MySqlD --initialize-insecure --basedir=$MySqlBase --datadir=$DataDir --innodb-undo-directory=$DataDir --console
+  & $MySqlD --initialize-insecure --basedir=$MySqlBase --datadir=$DataDir --console
 }
 
-$PortOpen = Test-NetConnection 127.0.0.1 -Port 3306 -InformationLevel Quiet
-if (!$PortOpen) {
-  $UndoFiles = @("undo_001", "undo_002", "undo_1_trunc.log", "undo_2_trunc.log")
-  $ExistingUndoFiles = $UndoFiles | ForEach-Object { Join-Path $DataDir $_ } | Where-Object { Test-Path $_ }
-  if ($ExistingUndoFiles.Count -gt 0) {
-    $UndoBackupDir = Join-Path $DataDir ("undo-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-    New-Item -ItemType Directory -Path $UndoBackupDir | Out-Null
-    foreach ($UndoFile in $ExistingUndoFiles) {
-      Move-Item -LiteralPath $UndoFile -Destination (Join-Path $UndoBackupDir (Split-Path -Leaf $UndoFile))
-    }
-    Write-Host "Moved stale undo files to: $UndoBackupDir" -ForegroundColor Yellow
-  }
-
+if (!(Test-DatabaseReady)) {
+  Backup-UndoFiles
   Start-Process -FilePath $MySqlD -ArgumentList @(
     "--basedir=$MySqlBase",
     "--datadir=$DataDir",
+    "--innodb-undo-directory=$DataDir",
     "--port=3306",
     "--bind-address=127.0.0.1",
     "--console"
   ) -WindowStyle Hidden
 
   $Ready = $false
-  for ($i = 0; $i -lt 20; $i++) {
+  for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 1
-    if (Test-NetConnection 127.0.0.1 -Port 3306 -InformationLevel Quiet) {
+    if (Test-DatabaseReady) {
       $Ready = $true
       break
     }
   }
 
   if (!$Ready) {
-    Write-Host "MySQL did not start on 127.0.0.1:3306. Run mysqld with --console to inspect the startup error." -ForegroundColor Red
+    Write-Host "MySQL did not become query-ready on 127.0.0.1:3306. Run mysqld with --console to inspect the startup error." -ForegroundColor Red
     exit 1
   }
 }
