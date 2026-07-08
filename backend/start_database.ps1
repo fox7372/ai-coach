@@ -32,6 +32,34 @@ function Backup-UndoFiles {
   Write-Host "Moved stale undo files to: $UndoBackupDir" -ForegroundColor Yellow
 }
 
+function Set-EnvValue {
+  param(
+    [string]$Key,
+    [string]$Value
+  )
+
+  $EnvPath = Join-Path $ProjectRoot ".env"
+  $Lines = @()
+  if (Test-Path $EnvPath) {
+    $Lines = [System.IO.File]::ReadAllLines($EnvPath, [System.Text.Encoding]::UTF8)
+  }
+
+  $Updated = $false
+  $Output = foreach ($Line in $Lines) {
+    if ($Line -match "^$([regex]::Escape($Key))=") {
+      $Updated = $true
+      "$Key=$Value"
+    } else {
+      $Line
+    }
+  }
+  if (!$Updated) {
+    $Output += "$Key=$Value"
+  }
+
+  [System.IO.File]::WriteAllLines($EnvPath, $Output, [System.Text.UTF8Encoding]::new($false))
+}
+
 if (!(Test-Path $MySqlD)) {
   Write-Host "MySQL/MariaDB compatible server was not found at: $MySqlD" -ForegroundColor Red
   exit 1
@@ -45,9 +73,10 @@ if (!(Test-Path $DataDir)) {
 if (!(Test-DatabaseReady)) {
   Backup-UndoFiles
   Start-Process -FilePath $MySqlD -ArgumentList @(
-    "--basedir=$MySqlBase",
-    "--datadir=$DataDir",
-    "--innodb-undo-directory=$DataDir",
+    "--basedir=`"$MySqlBase`"",
+    "--datadir=`"$DataDir`"",
+    "--innodb-undo-directory=`"$DataDir`"",
+    "--innodb-undo-tablespaces=0",
     "--port=3306",
     "--bind-address=127.0.0.1",
     "--console"
@@ -70,10 +99,6 @@ if (!(Test-DatabaseReady)) {
 
 & $MySql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS ai_learning DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;"
 
-[System.IO.File]::WriteAllText(
-  (Join-Path $ProjectRoot ".env"),
-  "DATABASE_URL=mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4",
-  [System.Text.UTF8Encoding]::new($false)
-)
+Set-EnvValue -Key "DATABASE_URL" -Value "mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4"
 
 Write-Host "Database is ready at 127.0.0.1:3306, database: ai_learning" -ForegroundColor Green

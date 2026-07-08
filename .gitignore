@@ -8,6 +8,7 @@ __pycache__/
 # Backend runtime data
 backend/.env
 backend/.mysql-data/
+backend/.mysql-data-backup-*/
 backend/uploads/
 
 # Frontend
