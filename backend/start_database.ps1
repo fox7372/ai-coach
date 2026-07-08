@@ -34,7 +34,7 @@ function Backup-UndoFiles {
 
 if (!(Test-Path $MySqlD)) {
   Write-Host "MySQL/MariaDB compatible server was not found at: $MySqlD" -ForegroundColor Red
-  throw "MySQL/MariaDB compatible server was not found at: $MySqlD"
+  exit 1
 }
 
 if (!(Test-Path $DataDir)) {
@@ -64,7 +64,7 @@ if (!(Test-DatabaseReady)) {
 
   if (!$Ready) {
     Write-Host "MySQL did not become query-ready on 127.0.0.1:3306. Run mysqld with --console to inspect the startup error." -ForegroundColor Red
-    throw "MySQL did not become query-ready on 127.0.0.1:3306."
+    exit 1
   }
 }
 

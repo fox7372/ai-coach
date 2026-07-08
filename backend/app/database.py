@@ -6,7 +6,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./ai_learning.db"
+    database_url: str = "mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4"
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
@@ -17,11 +17,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-engine_kwargs = {"pool_pre_ping": True}
-if settings.database_url.startswith("sqlite"):
-    engine_kwargs["connect_args"] = {"check_same_thread": False}
-
-engine = create_engine(settings.database_url, **engine_kwargs)
+engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

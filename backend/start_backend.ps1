@@ -11,39 +11,7 @@ if (!(Test-Path ".venv-win")) {
 
 .\.venv-win\Scripts\python.exe -m pip install -r requirements.txt
 
-function Set-EnvValue {
-  param(
-    [string]$Key,
-    [string]$Value
-  )
-
-  $EnvPath = Join-Path $ProjectRoot ".env"
-  $Lines = @()
-  if (Test-Path $EnvPath) {
-    $Lines = [System.IO.File]::ReadAllLines($EnvPath, [System.Text.Encoding]::UTF8)
-  }
-
-  $Updated = $false
-  $Output = foreach ($Line in $Lines) {
-    if ($Line -match "^$([regex]::Escape($Key))=") {
-      $Updated = $true
-      "$Key=$Value"
-    } else {
-      $Line
-    }
-  }
-  if (!$Updated) {
-    $Output += "$Key=$Value"
-  }
-  [System.IO.File]::WriteAllLines($EnvPath, $Output, [System.Text.UTF8Encoding]::new($false))
-}
-
-try {
-  .\start_database.ps1
-} catch {
-  Write-Host "MySQL did not start cleanly. Falling back to local SQLite: backend/ai_learning.db" -ForegroundColor Yellow
-  Set-EnvValue -Key "DATABASE_URL" -Value "sqlite:///./ai_learning.db"
-}
+.\start_database.ps1
 
 try {
   $Health = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/health -TimeoutSec 3
