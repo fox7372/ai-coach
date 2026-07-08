@@ -1,3 +1,7 @@
+import base64
+import mimetypes
+from pathlib import Path
+
 from openai import OpenAI
 
 from app.database import settings
@@ -18,6 +22,29 @@ def repair_mojibake(text: str) -> str:
     old_score = sum(text.count(marker) for marker in markers)
     new_score = sum(repaired.count(marker) for marker in markers)
     return repaired if new_score < old_score else text
+
+
+def model_supports_vision(model: str) -> bool:
+    model_name = model.lower()
+    vision_markers = (
+        "vision",
+        "vl",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-5",
+        "o3",
+        "o4",
+        "gemini",
+        "claude-3",
+        "claude-4",
+        "glm-4v",
+        "qwen2.5-vl",
+        "qwen-vl",
+    )
+    text_only_markers = ("deepseek-chat", "deepseek-reasoner")
+    if any(marker in model_name for marker in text_only_markers):
+        return False
+    return any(marker in model_name for marker in vision_markers)
 
 
 class AIService:
@@ -72,6 +99,41 @@ class AIService:
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
+            ],
+            stream=False,
+            **request_kwargs,
+        )
+        answer = response.choices[0].message.content or "AI 模型没有返回有效内容。"
+        return repair_mojibake(answer)
+
+    def supports_vision(self) -> bool:
+        return self.enabled and model_supports_vision(settings.ai_model)
+
+    def analyze_image(self, system_prompt: str, user_content: str, image_path: Path, temperature: float | None = None) -> str:
+        if not self.client:
+            return "当前还没有配置 AI_API_KEY，不能直接识别图片。"
+        if not self.supports_vision():
+            return f"当前模型 {settings.ai_model} 没有标记为识图模型，不能直接识别图片。"
+
+        image_bytes = image_path.read_bytes()
+        mime_type = mimetypes.guess_type(str(image_path))[0] or "image/png"
+        image_data = base64.b64encode(image_bytes).decode("ascii")
+
+        request_kwargs = {}
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
+
+        response = self.client.chat.completions.create(
+            model=settings.ai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_content},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}},
+                    ],
+                },
             ],
             stream=False,
             **request_kwargs,

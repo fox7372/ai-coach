@@ -68,7 +68,16 @@ type Mistake = {
   ocr_text?: string | null
   review_status: string
 }
-type OcrMistakeResult = { image_path: string; ocr_text: string; ocr_engine: string; message: string }
+type ImageMistakeUploadResult = {
+  image_path: string
+  ocr_text?: string
+  ocr_engine?: string
+  message: string
+  mode?: 'vision' | 'manual_text_required'
+  supports_vision?: boolean
+  analysis?: string
+  mistake_id?: number | null
+}
 type Diagnosis = { progress: number; mastery: number; items: Array<{ label: string; value: number; status: string }> }
 type Profile = { radar: Array<{ name: string; value: number }>; conclusion: string }
 type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string; created_at?: string }
@@ -1191,7 +1200,7 @@ function MistakesPanel({
 }) {
   const [imageBusy, setImageBusy] = useState(false)
   const [imageMessage, setImageMessage] = useState('')
-  const [ocrResult, setOcrResult] = useState<OcrMistakeResult | null>(null)
+  const [imageResult, setImageResult] = useState<ImageMistakeUploadResult | null>(null)
   const [questionText, setQuestionText] = useState('')
   const [studentAnswer, setStudentAnswer] = useState('')
   const [correctAnswer, setCorrectAnswer] = useState('')
@@ -1201,17 +1210,20 @@ function MistakesPanel({
     const file = event.target.files?.[0]
     if (!file) return
     setImageBusy(true)
-    setImageMessage('正在保存图片并尝试 OCR 识别...')
+    setImageMessage('正在上传图片，并判断当前模型是否支持识图...')
     setImageAnalysis('')
+    setQuestionText('')
     try {
       const formData = new FormData()
       formData.append('image', file)
-      const result = (await http.post(`/api/ai/ocr-mistake-image?user_id=${userId}&course_id=${courseId}`, formData, { timeout: 120000 })) as unknown as OcrMistakeResult
-      setOcrResult(result)
-      setQuestionText(result.ocr_text)
+      const result = (await http.post(`/api/ai/analyze-mistake-image-upload?user_id=${userId}&course_id=${courseId}`, formData, { timeout: 300000 })) as unknown as ImageMistakeUploadResult
+      setImageResult(result)
+      setQuestionText(result.ocr_text || '')
+      if (result.analysis) setImageAnalysis(result.analysis)
       setImageMessage(result.message)
+      if (result.mistake_id) await onSaved()
     } catch (error: any) {
-      setImageMessage(error?.response?.data?.detail || '图片识别失败，请稍后重试。')
+      setImageMessage(error?.response?.data?.detail || '图片分析失败，请稍后重试。')
     } finally {
       setImageBusy(false)
       event.target.value = ''
@@ -1232,8 +1244,8 @@ function MistakesPanel({
         question_text: questionText,
         student_answer: studentAnswer,
         correct_answer: correctAnswer,
-        image_path: ocrResult?.image_path,
-        ocr_text: ocrResult?.ocr_text,
+        image_path: imageResult?.image_path,
+        ocr_text: imageResult?.ocr_text || questionText,
         save_to_mistakes: true,
       }, { timeout: 300000 })) as unknown as { analysis: string; mistake_id: number | null }
       setImageAnalysis(result.analysis)
@@ -1257,7 +1269,7 @@ function MistakesPanel({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h4 className="font-semibold text-slate-900">上传错题图片</h4>
-            <p className="mt-1 text-sm text-slate-500">先 OCR 识别图片文字，学生确认后再交给当前 AI 模型分析并加入错题库。</p>
+            <p className="mt-1 text-sm text-slate-500">识图模型会直接分析图片并加入错题库；非识图模型会提示你改用文字输入。</p>
           </div>
           <label className="secondary-action inline-flex cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold">
             {imageBusy ? <Loader2 className="animate-spin" size={16} /> : <FileUp size={16} />}
@@ -1266,11 +1278,11 @@ function MistakesPanel({
           </label>
         </div>
         {imageMessage && <p className="mt-3 rounded-xl bg-white/80 px-3 py-2 text-sm text-slate-600">{imageMessage}</p>}
-        {(ocrResult || questionText) && (
+        {((imageResult && !imageResult.supports_vision) || questionText) && (
           <div className="mt-4 grid gap-3">
             <label className="block text-sm font-medium text-slate-700">
-              识别/确认后的题目文字
-              <textarea value={questionText} onChange={(event) => setQuestionText(event.target.value)} rows={5} className="mt-2 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-500" placeholder="OCR 没识别出来时，可以手动输入题目文字。" />
+              题目文字
+              <textarea value={questionText} onChange={(event) => setQuestionText(event.target.value)} rows={5} className="mt-2 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-500" placeholder="当前模型不能直接识图时，在这里输入题目文字。" />
             </label>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block text-sm font-medium text-slate-700">
@@ -1304,7 +1316,7 @@ function MistakesPanel({
               </button>
             </div>
             <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{item.ai_analysis}</p>
-            {item.ocr_text && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-white/70 p-3 text-xs text-slate-500">OCR/题目文字：{item.ocr_text}</p>}
+            {item.ocr_text && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-white/70 p-3 text-xs text-slate-500">题目文字：{item.ocr_text}</p>}
             {item.weak_points && <p className="mt-2 text-sm text-slate-600">薄弱点：{item.weak_points}</p>}
             {item.suggestion && <p className="text-sm text-slate-600">建议：{item.suggestion}</p>}
           </div>

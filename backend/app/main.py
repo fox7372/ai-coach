@@ -2280,6 +2280,74 @@ def ocr_mistake_image(
     }
 
 
+@app.post("/api/ai/analyze-mistake-image-upload")
+def analyze_mistake_image_upload(
+    user_id: int = 1,
+    course_id: int = 1,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id, CourseModel.user_id == user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+
+    image_path = save_mistake_image(image, user_id, course_id)
+    if not ai_service.enabled:
+        return {
+            "mode": "manual_text_required",
+            "supports_vision": False,
+            "image_path": str(image_path),
+            "analysis": "",
+            "mistake_id": None,
+            "message": "当前还没有配置 AI API Key，不能直接识别图片。请先在设置里配置 Key，或在下方手动输入题目文字后再让 AI 分析。",
+        }
+
+    if not ai_service.supports_vision():
+        return {
+            "mode": "manual_text_required",
+            "supports_vision": False,
+            "image_path": str(image_path),
+            "analysis": "",
+            "mistake_id": None,
+            "message": f"当前模型 {settings.ai_model} 不支持直接识别图片。请切换到识图模型，或在下方手动输入题目文字后再让 AI 分析。",
+        }
+
+    try:
+        result = ai_service.analyze_image(
+            "你是错题图片分析助手。请直接阅读图片内容，用中文分析题目、解题步骤、错误原因、薄弱知识点和下一步练习建议。"
+            "如果图片中包含学生作答痕迹，请区分题目、学生答案和正确思路。"
+            "如果图片不清晰或信息不足，请明确指出需要学生补充的信息，不要编造题干。",
+            "请分析这张错题图片，并给出可执行的订正建议。",
+            image_path,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"识图模型调用失败：{clean_error_message(exc)}") from exc
+
+    mistake = MistakeRecord(
+        user_id=user_id,
+        course_id=course_id,
+        mistake_type="image_mistake",
+        ai_analysis=f"AI 直接识别图片分析：\n{result}",
+        weak_points="由识图模型分析错题图片生成",
+        suggestion="根据 AI 图片分析完成订正；若图片不清晰，请补充题目文字后再次分析。",
+        image_path=str(image_path),
+        ocr_text=None,
+    )
+    db.add(mistake)
+    course.mastery = max(0, min(100, course.mastery - 5))
+    db.commit()
+    db.refresh(mistake)
+
+    return {
+        "mode": "vision",
+        "supports_vision": True,
+        "image_path": str(image_path),
+        "analysis": result,
+        "mistake_id": mistake.id,
+        "message": "识图模型已直接分析图片，并加入错题库。",
+    }
+
+
 @app.post("/api/ai/analyze-mistake-image")
 def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     if not payload.question_text.strip():
@@ -2287,9 +2355,9 @@ def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Dep
 
     result = ai_service.generate_text(
         "你是错题图片分析助手。请用中文分析题目、解题步骤、错误原因、薄弱知识点和下一步练习建议。"
-        "如果 OCR 文字可能不完整，请明确提醒学生核对原图。",
+        "如果题目文字可能不完整，请明确提醒学生补充原题信息。",
         (
-            f"OCR/确认后的题目文字：\n{payload.question_text}\n\n"
+            f"手动输入/确认后的题目文字：\n{payload.question_text}\n\n"
             f"学生答案：{payload.student_answer or '未提供'}\n"
             f"参考答案：{payload.correct_answer or '未提供'}"
         ),
@@ -2303,7 +2371,7 @@ def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Dep
             mistake_type="image_mistake",
             ai_analysis=f"题目文字：\n{payload.question_text}\n\nAI 分析：\n{result}",
             weak_points="由错题图片分析生成",
-            suggestion="核对 OCR 文字后，按 AI 建议完成订正和同类练习。",
+            suggestion="核对题目文字后，按 AI 建议完成订正和同类练习。",
             image_path=payload.image_path,
             ocr_text=payload.ocr_text or payload.question_text,
         )
