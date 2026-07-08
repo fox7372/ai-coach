@@ -22,22 +22,24 @@ def repair_mojibake(text: str) -> str:
 
 class AIService:
     def __init__(self) -> None:
-        self.api_key = settings.deepseek_api_key
-        self.base_url = settings.deepseek_base_url
-        self.model = settings.deepseek_model
+        self.provider = settings.ai_provider
+        self.api_key = settings.ai_api_key
+        self.base_url = settings.ai_base_url
+        self.model = settings.ai_model
         self.reload()
 
     def reload(self) -> None:
-        self.enabled = bool(settings.deepseek_api_key)
+        self.enabled = bool(settings.ai_api_key)
         self.client = None
         if self.enabled:
             self.client = OpenAI(
-                api_key=settings.deepseek_api_key,
-                base_url=settings.deepseek_base_url,
+                api_key=settings.ai_api_key,
+                base_url=settings.ai_base_url,
             )
-        self.api_key = settings.deepseek_api_key
-        self.base_url = settings.deepseek_base_url
-        self.model = settings.deepseek_model
+        self.provider = settings.ai_provider
+        self.api_key = settings.ai_api_key
+        self.base_url = settings.ai_base_url
+        self.model = settings.ai_model
 
     def answer_question(self, question: str, context: str | None = None) -> str:
         system_prompt = (
@@ -57,7 +59,7 @@ class AIService:
     def generate_text(self, system_prompt: str, user_content: str, temperature: float | None = None) -> str:
         if not self.client:
             return (
-                "当前还没有配置 DEEPSEEK_API_KEY，所以先返回演示结果。\n\n"
+                "当前还没有配置 AI_API_KEY，所以先返回演示结果。\n\n"
                 f"任务内容：{user_content[:500]}"
             )
 
@@ -66,7 +68,7 @@ class AIService:
             request_kwargs["temperature"] = temperature
 
         response = self.client.chat.completions.create(
-            model=settings.deepseek_model,
+            model=settings.ai_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
@@ -74,5 +76,5 @@ class AIService:
             stream=False,
             **request_kwargs,
         )
-        answer = response.choices[0].message.content or "DeepSeek 没有返回有效内容。"
+        answer = response.choices[0].message.content or "AI 模型没有返回有效内容。"
         return repair_mojibake(answer)

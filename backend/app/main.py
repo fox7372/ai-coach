@@ -1051,6 +1051,7 @@ class AIConfigOut(BaseModel):
 
 
 class AIConfigUpdate(BaseModel):
+    provider: str = "deepseek"
     api_key: str
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-chat"
@@ -1318,18 +1319,18 @@ def health(db: Session = Depends(get_db)) -> dict[str, object]:
     return {
         "status": "ok",
         "database": "connected",
-        "ai_provider": "deepseek" if ai_service.enabled else "mock",
-        "ai_model": settings.deepseek_model,
+        "ai_provider": settings.ai_provider if ai_service.enabled else "mock",
+        "ai_model": settings.ai_model,
     }
 
 
 @app.get("/settings/ai", response_model=AIConfigOut)
 def get_ai_config() -> AIConfigOut:
     return AIConfigOut(
-        provider="deepseek" if ai_service.enabled else "mock",
-        model=settings.deepseek_model,
-        base_url=settings.deepseek_base_url,
-        has_api_key=bool(settings.deepseek_api_key),
+        provider=settings.ai_provider,
+        model=settings.ai_model,
+        base_url=settings.ai_base_url,
+        has_api_key=bool(settings.ai_api_key),
     )
 
 
@@ -1339,21 +1340,23 @@ def update_ai_config(payload: AIConfigUpdate) -> AIConfigOut:
     if not api_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API Key 不能为空")
 
-    settings.deepseek_api_key = api_key
-    settings.deepseek_base_url = payload.base_url.strip() or "https://api.deepseek.com"
-    settings.deepseek_model = payload.model.strip() or "deepseek-chat"
+    settings.ai_provider = payload.provider.strip() or "custom"
+    settings.ai_api_key = api_key
+    settings.ai_base_url = payload.base_url.strip() or "https://api.deepseek.com"
+    settings.ai_model = payload.model.strip() or "deepseek-chat"
 
-    write_env_value("DEEPSEEK_API_KEY", settings.deepseek_api_key)
-    write_env_value("DEEPSEEK_BASE_URL", settings.deepseek_base_url)
-    write_env_value("DEEPSEEK_MODEL", settings.deepseek_model)
+    write_env_value("AI_PROVIDER", settings.ai_provider)
+    write_env_value("AI_API_KEY", settings.ai_api_key)
+    write_env_value("AI_BASE_URL", settings.ai_base_url)
+    write_env_value("AI_MODEL", settings.ai_model)
 
     ai_service.reload()
 
     return AIConfigOut(
-        provider="deepseek" if ai_service.enabled else "mock",
-        model=settings.deepseek_model,
-        base_url=settings.deepseek_base_url,
-        has_api_key=bool(settings.deepseek_api_key),
+        provider=settings.ai_provider,
+        model=settings.ai_model,
+        base_url=settings.ai_base_url,
+        has_api_key=bool(settings.ai_api_key),
     )
 
 
@@ -2740,10 +2743,10 @@ def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskRespo
 
     try:
         answer = ai_service.answer_question(payload.question, context=rag_context or None)
-        provider = "deepseek" if ai_service.enabled else "mock"
+        provider = settings.ai_provider if ai_service.enabled else "mock"
     except Exception as exc:
-        answer = f"DeepSeek 调用失败：{exc}"
-        provider = "deepseek-error"
+        answer = f"AI 模型调用失败：{exc}"
+        provider = f"{settings.ai_provider}-error"
 
     if retrieved_chunks and direct_match:
         references = []
