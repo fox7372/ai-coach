@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-from app.ai_service import AIService
+from app.ai_service import AIService, repair_mojibake
 from app.database import Base, SessionLocal, engine, get_db, settings
 from app.models import (
     AnswerRecord,
@@ -1041,6 +1041,19 @@ def document_to_resource(db: Session, document: Document) -> ResourceOut:
 
 def clean_error_message(exc: Exception) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", str(exc)).strip()
+
+
+def extract_mistake_question_text(text_value: str | None) -> str:
+    text_value = repair_mojibake(text_value or "")
+    for raw_line in text_value.splitlines():
+        line = raw_line.strip(" -*\t")
+        plain_line = re.sub(r"[*_`#]+", "", line).strip()
+        if "题目" in plain_line and ("：" in plain_line or ":" in plain_line):
+            separator = "：" if "：" in plain_line else ":"
+            question_text = plain_line.split(separator, 1)[1].strip()
+            if question_text:
+                return question_text
+    return ""
 
 
 class AIConfigOut(BaseModel):
@@ -2247,6 +2260,7 @@ def analyze_mistake(payload: MistakeAnalyzeRequest, db: Session = Depends(get_db
         ai_analysis=result,
         weak_points="由 AI 分析生成",
         suggestion="根据错题分析完成针对性复习和练习。",
+        ocr_text=payload.question,
     )
     db.add(mistake)
 
@@ -2316,8 +2330,9 @@ def analyze_mistake_image_upload(
         result = ai_service.analyze_image(
             "你是错题图片分析助手。请直接阅读图片内容，用中文分析题目、解题步骤、错误原因、薄弱知识点和下一步练习建议。"
             "如果图片中包含学生作答痕迹，请区分题目、学生答案和正确思路。"
-            "如果图片不清晰或信息不足，请明确指出需要学生补充的信息，不要编造题干。",
-            "请分析这张错题图片，并给出可执行的订正建议。",
+            "如果图片不清晰或信息不足，请明确指出需要学生补充的信息，不要编造题干。"
+            "不要使用 emoji。回答第一行必须写“题目：”，后面给出你从图片中识别到的题目内容。",
+            "请分析这张错题图片，并给出可执行的订正建议。请按“题目、解题思路、错误原因、薄弱知识点、复习建议”的结构回答。",
             image_path,
         )
     except Exception as exc:
@@ -2331,7 +2346,7 @@ def analyze_mistake_image_upload(
         weak_points="由识图模型分析错题图片生成",
         suggestion="根据 AI 图片分析完成订正；若图片不清晰，请补充题目文字后再次分析。",
         image_path=str(image_path),
-        ocr_text=None,
+        ocr_text=extract_mistake_question_text(result),
     )
     db.add(mistake)
     course.mastery = max(0, min(100, course.mastery - 5))
@@ -2430,6 +2445,7 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
             ai_analysis=analysis,
             weak_points="测验错题暴露的薄弱点",
             suggestion="复习对应知识点后重新练习。",
+            ocr_text=question.content,
         )
         db.add(mistake)
 
@@ -3025,7 +3041,7 @@ def create_mistake(payload: MistakeCreate, db: Session = Depends(get_db)) -> dic
         weak_points=payload.weak_points,
         suggestion=payload.suggestion,
         image_path=payload.image_path,
-        ocr_text=payload.ocr_text,
+        ocr_text=payload.ocr_text or extract_mistake_question_text(payload.ai_analysis),
     )
     db.add(mistake)
     db.commit()
@@ -3039,21 +3055,25 @@ def list_mistakes(user_id: int = 1, course_id: int | None = None, db: Session = 
     if course_id is not None:
         query = query.where(MistakeRecord.course_id == course_id)
     mistakes = db.scalars(query.order_by(MistakeRecord.id.desc())).all()
-    return [
-        {
-            "id": item.id,
-            "course_id": item.course_id,
-            "mistake_type": item.mistake_type,
-            "ai_analysis": item.ai_analysis,
-            "weak_points": item.weak_points,
-            "suggestion": item.suggestion,
-            "image_path": item.image_path,
-            "ocr_text": item.ocr_text,
-            "review_status": item.review_status,
-            "created_at": item.created_at,
-        }
-        for item in mistakes
-    ]
+    results: list[dict[str, object]] = []
+    for item in mistakes:
+        ai_analysis = repair_mojibake(item.ai_analysis or "")
+        ocr_text = repair_mojibake(item.ocr_text or "") or extract_mistake_question_text(ai_analysis)
+        results.append(
+            {
+                "id": item.id,
+                "course_id": item.course_id,
+                "mistake_type": item.mistake_type,
+                "ai_analysis": ai_analysis,
+                "weak_points": repair_mojibake(item.weak_points or ""),
+                "suggestion": repair_mojibake(item.suggestion or ""),
+                "image_path": item.image_path,
+                "ocr_text": ocr_text,
+                "review_status": item.review_status,
+                "created_at": item.created_at,
+            }
+        )
+    return results
 
 
 @app.delete("/mistakes/{mistake_id}")

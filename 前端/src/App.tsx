@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import rehypeKatex from 'rehype-katex'
+import remarkMath from 'remark-math'
 import {
   AlertCircle,
   BookOpen,
@@ -130,6 +132,29 @@ function LoadingNotice({ text }: { text: string }) {
       <span className="font-medium">{text}</span>
     </div>
   )
+}
+
+function cleanStudyText(value: string | null | undefined) {
+  return (value || '').replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '').trim()
+}
+
+function stripDuplicateQuestion(analysis: string | null | undefined, question: string | null | undefined) {
+  const text = cleanStudyText(analysis)
+  const normalizedQuestion = cleanStudyText(question)
+  if (!normalizedQuestion) return text
+  return text
+    .replace(new RegExp(`^\\s*题目[：:]\\s*${escapeRegExp(normalizedQuestion)}\\s*`, 'u'), '')
+    .replace(new RegExp(`^\\s*题目文字[：:]\\s*${escapeRegExp(normalizedQuestion)}\\s*`, 'u'), '')
+    .replace(/^题目文字：\s*[\s\S]*?\n\nAI 分析：\s*/u, '')
+    .trim()
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function MarkdownBlock({ children }: { children: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{children}</ReactMarkdown>
 }
 
 function DoclingParsingNotice({ message }: { message: string }) {
@@ -1059,6 +1084,7 @@ function QuizPanel({
         ].filter(Boolean).join('\n\n'),
         weak_points: '测验中标记的薄弱点',
         suggestion: '加入错题本后复习对应知识点，并重新完成同类题。',
+        ocr_text: question.content,
       })
       setSavedMistakes((items) => ({ ...items, [question.id]: true }))
       await onMistakeSaved()
@@ -1307,20 +1333,36 @@ function MistakesPanel({
         )}
       </div>
       <div className="mt-4 grid gap-3">
-        {mistakes.map((item) => (
-          <div key={item.id} className="rounded-lg border border-red-100 bg-red-50 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <p className="font-semibold text-red-700">{item.mistake_type || '错题记录'} · {item.review_status}</p>
-              <button onClick={() => void onDelete(item.id)} disabled={loading} className="rounded-lg bg-white p-2 text-red-500 hover:bg-red-100 disabled:text-slate-400" title="删除错题">
-                {loading ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />}
-              </button>
+        {mistakes.map((item) => {
+          const questionText = cleanStudyText(item.ocr_text)
+          const analysisText = stripDuplicateQuestion(item.ai_analysis, questionText)
+          return (
+            <div key={item.id} className="rounded-lg border border-red-100 bg-red-50 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-semibold text-red-700">{item.mistake_type || '错题记录'} · {item.review_status}</p>
+                <button onClick={() => void onDelete(item.id)} disabled={loading} className="rounded-lg bg-white p-2 text-red-500 hover:bg-red-100 disabled:text-slate-400" title="删除错题">
+                  {loading ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />}
+                </button>
+              </div>
+              {questionText && (
+                <div className="mt-3 rounded-lg bg-white/80 p-3 text-sm text-slate-800">
+                  <p className="mb-1 text-xs font-semibold text-red-600">题目</p>
+                  <div className="markdown-answer">
+                    <MarkdownBlock>{questionText}</MarkdownBlock>
+                  </div>
+                </div>
+              )}
+              {analysisText && (
+                <div className="markdown-answer mt-3 rounded-lg bg-white/70 p-3 text-sm text-slate-700">
+                  <p className="mb-2 text-xs font-semibold text-slate-500">AI 分析</p>
+                  <MarkdownBlock>{analysisText}</MarkdownBlock>
+                </div>
+              )}
+              {item.weak_points && <p className="mt-2 text-sm text-slate-600">薄弱点：{cleanStudyText(item.weak_points)}</p>}
+              {item.suggestion && <p className="text-sm text-slate-600">建议：{cleanStudyText(item.suggestion)}</p>}
             </div>
-            <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{item.ai_analysis}</p>
-            {item.ocr_text && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-white/70 p-3 text-xs text-slate-500">题目文字：{item.ocr_text}</p>}
-            {item.weak_points && <p className="mt-2 text-sm text-slate-600">薄弱点：{item.weak_points}</p>}
-            {item.suggestion && <p className="text-sm text-slate-600">建议：{item.suggestion}</p>}
-          </div>
-        ))}
+          )
+        })}
         {!mistakes.length && <p className="text-sm text-slate-500">暂无错题。</p>}
       </div>
     </Panel>
@@ -1885,6 +1927,7 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
         ai_analysis: `来自 AI 问答的复盘记录\n\n学生问题：\n${previousQuestion || '未记录'}\n\nAI 回答：\n${message.content}`,
         weak_points: '由学生从 AI 问答加入错题库',
         suggestion: '回到原问题和课程资料核对，整理成自己的订正笔记。',
+        ocr_text: previousQuestion || '未记录',
       })
       setMistakeMessage('已加入当前课程错题库。')
       await onMistakeSaved()
