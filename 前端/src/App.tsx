@@ -2039,6 +2039,17 @@ function SettingsView() {
     setMessage(`AI 设置已保存：${result.provider} / ${result.model}`)
   }
 
+  async function removeConfig() {
+    if (!window.confirm('确定删除当前 AI 配置吗？删除后问答会回到演示模式。')) return
+    const result = (await http.delete('/settings/ai')) as unknown as AIConfig
+    setCurrent(result)
+    setApiKey('')
+    setProvider(result.provider)
+    setBaseUrl(result.base_url)
+    setModel(result.model)
+    setMessage('AI 配置已删除，当前为演示模式。')
+  }
+
   return (
     <Panel>
       <h2 className="text-xl font-semibold">设置</h2>
@@ -2066,7 +2077,10 @@ function SettingsView() {
         API Key
         <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
       </label>
-      <button onClick={() => void save()} className="mt-4 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">保存</button>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button onClick={() => void save()} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">保存</button>
+        <button onClick={() => void removeConfig()} className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100">删除 AI 配置</button>
+      </div>
       {message && <p className="mt-3 text-sm text-slate-500">{message}</p>}
     </Panel>
   )

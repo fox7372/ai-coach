@@ -1135,6 +1135,16 @@ def write_env_value(key: str, value: str) -> None:
     env_path.write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
+def remove_env_values(keys: set[str]) -> None:
+    env_path = ROOT_DIR / ".env"
+    if not env_path.exists():
+        return
+
+    lines = env_path.read_text(encoding="utf-8-sig").splitlines()
+    output = [line for line in lines if not any(line.startswith(f"{key}=") for key in keys)]
+    env_path.write_text("\n".join(output) + ("\n" if output else ""), encoding="utf-8")
+
+
 def delete_uploaded_file(storage_path: str) -> bool:
     """Delete an uploaded file only when it is inside the managed uploads folder."""
     try:
@@ -1357,6 +1367,38 @@ def update_ai_config(payload: AIConfigUpdate) -> AIConfigOut:
         model=settings.ai_model,
         base_url=settings.ai_base_url,
         has_api_key=bool(settings.ai_api_key),
+    )
+
+
+@app.delete("/settings/ai", response_model=AIConfigOut)
+def delete_ai_config() -> AIConfigOut:
+    settings.ai_provider = "deepseek"
+    settings.ai_api_key = None
+    settings.ai_base_url = "https://api.deepseek.com"
+    settings.ai_model = "deepseek-chat"
+    settings.deepseek_api_key = None
+    settings.deepseek_base_url = None
+    settings.deepseek_model = None
+
+    remove_env_values(
+        {
+            "AI_PROVIDER",
+            "AI_API_KEY",
+            "AI_BASE_URL",
+            "AI_MODEL",
+            "DEEPSEEK_API_KEY",
+            "DEEPSEEK_BASE_URL",
+            "DEEPSEEK_MODEL",
+        }
+    )
+
+    ai_service.reload()
+
+    return AIConfigOut(
+        provider=settings.ai_provider,
+        model=settings.ai_model,
+        base_url=settings.ai_base_url,
+        has_api_key=False,
     )
 
 
