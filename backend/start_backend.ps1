@@ -22,6 +22,13 @@ function Stop-BackendPort {
 
   foreach ($PortPid in $PortPids) {
     if ([int]$PortPid -ne $PID) {
+      $ChildProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ParentProcessId -eq [int]$PortPid }
+
+      foreach ($ChildProcess in $ChildProcesses) {
+        Stop-Process -Id ([int]$ChildProcess.ProcessId) -Force -ErrorAction SilentlyContinue
+      }
+
       Stop-Process -Id ([int]$PortPid) -Force -ErrorAction SilentlyContinue
     }
   }
