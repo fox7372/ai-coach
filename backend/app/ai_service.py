@@ -26,25 +26,20 @@ def repair_mojibake(text: str) -> str:
 
 def model_supports_vision(model: str) -> bool:
     model_name = model.lower()
-    vision_markers = (
-        "vision",
-        "vl",
-        "gpt-4o",
-        "gpt-4.1",
-        "gpt-5",
-        "o3",
-        "o4",
-        "gemini",
-        "claude-3",
-        "claude-4",
-        "glm-4v",
-        "qwen2.5-vl",
-        "qwen-vl",
+    text_only_markers = (
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "qwen3.7-plus",
+        "qwen3-plus",
+        "qwen-plus",
+        "qwen-max",
+        "qwen-turbo",
+        "qwen-long",
+        "embedding",
+        "rerank",
+        "text-",
     )
-    text_only_markers = ("deepseek-chat", "deepseek-reasoner")
-    if any(marker in model_name for marker in text_only_markers):
-        return False
-    return any(marker in model_name for marker in vision_markers)
+    return not any(marker in model_name for marker in text_only_markers)
 
 
 class AIService:
@@ -113,7 +108,7 @@ class AIService:
         if not self.client:
             return "当前还没有配置 AI_API_KEY，不能直接识别图片。"
         if not self.supports_vision():
-            return f"当前模型 {settings.ai_model} 没有标记为识图模型，不能直接识别图片。"
+            return f"当前模型 {settings.ai_model} 在文本模型黑名单中，不能直接识别图片。"
 
         image_bytes = image_path.read_bytes()
         mime_type = mimetypes.guess_type(str(image_path))[0] or "image/png"

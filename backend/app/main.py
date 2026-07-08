@@ -2309,7 +2309,7 @@ def analyze_mistake_image_upload(
             "image_path": str(image_path),
             "analysis": "",
             "mistake_id": None,
-            "message": f"当前模型 {settings.ai_model} 不支持直接识别图片。请切换到识图模型，或在下方手动输入题目文字后再让 AI 分析。",
+            "message": f"当前模型 {settings.ai_model} 在文本模型黑名单中，不直接发送图片。请切换到识图模型，或在下方手动输入题目文字后再让 AI 分析。",
         }
 
     try:
