@@ -2051,6 +2051,20 @@ function SettingsView() {
     setMessage(`AI 设置已保存：${result.provider} / ${result.model}`)
   }
 
+  async function changeModel() {
+    if (!baseUrl.trim() || !model.trim()) {
+      setMessage('请填写 Base URL 和模型名')
+      return
+    }
+    const result = (await http.post('/settings/ai', {
+      provider,
+      base_url: baseUrl,
+      model,
+    })) as unknown as AIConfig
+    setCurrent(result)
+    setMessage(`模型已更改：${result.provider} / ${result.model}${result.has_api_key ? '' : '，但还没有配置 Key'}`)
+  }
+
   async function removeConfig() {
     if (!window.confirm('确定删除当前 AI 配置吗？删除后问答会回到演示模式。')) return
     try {
@@ -2094,7 +2108,8 @@ function SettingsView() {
         <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" />
       </label>
       <div className="mt-4 flex flex-wrap gap-3">
-        <button onClick={() => void save()} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">保存</button>
+        <button onClick={() => void save()} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">保存 API Key</button>
+        <button onClick={() => void changeModel()} className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">更改模型</button>
         <button onClick={() => void removeConfig()} className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100">删除 AI 配置</button>
       </div>
       {message && <p className="mt-3 text-sm text-slate-500">{message}</p>}

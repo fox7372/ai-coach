@@ -1052,7 +1052,7 @@ class AIConfigOut(BaseModel):
 
 class AIConfigUpdate(BaseModel):
     provider: str = "deepseek"
-    api_key: str
+    api_key: str | None = None
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-chat"
 
@@ -1346,19 +1346,19 @@ def get_ai_config() -> AIConfigOut:
 
 @app.post("/settings/ai", response_model=AIConfigOut)
 def update_ai_config(payload: AIConfigUpdate) -> AIConfigOut:
-    api_key = payload.api_key.strip()
-    if not api_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API Key 不能为空")
+    api_key = payload.api_key.strip() if payload.api_key else None
 
     settings.ai_provider = payload.provider.strip() or "custom"
-    settings.ai_api_key = api_key
     settings.ai_base_url = payload.base_url.strip() or "https://api.deepseek.com"
     settings.ai_model = payload.model.strip() or "deepseek-chat"
+    if api_key:
+        settings.ai_api_key = api_key
 
     write_env_value("AI_PROVIDER", settings.ai_provider)
-    write_env_value("AI_API_KEY", settings.ai_api_key)
     write_env_value("AI_BASE_URL", settings.ai_base_url)
     write_env_value("AI_MODEL", settings.ai_model)
+    if api_key:
+        write_env_value("AI_API_KEY", settings.ai_api_key)
 
     ai_service.reload()
 
