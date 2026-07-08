@@ -2041,13 +2041,17 @@ function SettingsView() {
 
   async function removeConfig() {
     if (!window.confirm('确定删除当前 AI 配置吗？删除后问答会回到演示模式。')) return
-    const result = (await http.delete('/settings/ai')) as unknown as AIConfig
-    setCurrent(result)
-    setApiKey('')
-    setProvider(result.provider)
-    setBaseUrl(result.base_url)
-    setModel(result.model)
-    setMessage('AI 配置已删除，当前为演示模式。')
+    try {
+      const result = (await http.delete('/settings/ai')) as unknown as AIConfig
+      setCurrent(result)
+      setApiKey('')
+      setProvider(result.provider)
+      setBaseUrl(result.base_url)
+      setModel(result.model)
+      setMessage('AI 配置已删除，当前为演示模式。')
+    } catch {
+      setMessage('删除失败：当前后端可能不是最新版本，请重启后端后再试。')
+    }
   }
 
   return (
