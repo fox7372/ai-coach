@@ -1199,19 +1199,22 @@ def extract_text_from_image(image_path: Path) -> tuple[str, str]:
 
 def ensure_chat_schema() -> None:
     with engine.begin() as connection:
-        columns = {
-            row[0]
-            for row in connection.execute(
-                text(
-                    """
-                    SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE TABLE_SCHEMA = DATABASE()
-                      AND TABLE_NAME = 'chat_messages'
-                    """
+        if engine.dialect.name == "sqlite":
+            columns = {row[1] for row in connection.execute(text("PRAGMA table_info(chat_messages)"))}
+        else:
+            columns = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT COLUMN_NAME
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'chat_messages'
+                        """
+                    )
                 )
-            )
-        }
+            }
         if "session_id" not in columns:
             connection.execute(text("ALTER TABLE chat_messages ADD COLUMN session_id INT NULL"))
 
@@ -1258,22 +1261,27 @@ def ensure_resource_schema() -> None:
     }
     with engine.begin() as connection:
         for table_name, columns_to_add in table_columns.items():
-            existing_columns = {
-                row[0]
-                for row in connection.execute(
-                    text(
-                        """
-                        SELECT COLUMN_NAME
-                        FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_SCHEMA = DATABASE()
-                          AND TABLE_NAME = :table_name
-                        """
-                    ),
-                    {"table_name": table_name},
-                )
-            }
+            if engine.dialect.name == "sqlite":
+                existing_columns = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table_name})"))}
+            else:
+                existing_columns = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            """
+                            SELECT COLUMN_NAME
+                            FROM INFORMATION_SCHEMA.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE()
+                              AND TABLE_NAME = :table_name
+                            """
+                        ),
+                        {"table_name": table_name},
+                    )
+                }
             for column_name, column_type in columns_to_add.items():
                 if column_name not in existing_columns:
+                    if engine.dialect.name == "sqlite":
+                        column_type = column_type.replace("LONGTEXT", "TEXT")
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 

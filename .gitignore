@@ -9,6 +9,7 @@ __pycache__/
 backend/.env
 backend/.mysql-data/
 backend/uploads/
+backend/*.db
 
 # Frontend
 node_modules/
