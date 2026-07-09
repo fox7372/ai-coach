@@ -1,10 +1,9 @@
 ﻿import html
 import ipaddress
 import json
-import math
 import re
 import socket
-from hashlib import md5, sha256
+from hashlib import sha256
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -37,6 +36,7 @@ from app.models import (
     Question,
     User,
 )
+from app.rag_service import hash_embedding, rag_service
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -392,18 +392,11 @@ def format_time(seconds: float | None) -> str:
     return f"{minutes:02d}:{sec:02d}"
 
 
-def make_embedding(text_value: str, dimensions: int = 96) -> list[float]:
-    vector = [0.0] * dimensions
-    tokens = re.findall(r"[\w\u4e00-\u9fff]+", text_value.lower())
-    if not tokens:
-        tokens = list(text_value[:500])
-    for token in tokens:
-        digest = md5(token.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:4], "big") % dimensions
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
-        vector[index] += sign
-    norm = math.sqrt(sum(item * item for item in vector)) or 1.0
-    return [round(item / norm, 6) for item in vector]
+def make_embedding(text_value: str) -> list[float]:
+    try:
+        return rag_service.embed_text(text_value)
+    except Exception:
+        return hash_embedding(text_value)
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -413,7 +406,55 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(left[index] * right[index] for index in range(size))
 
 
+def index_chunk_in_chroma(db: Session, chunk: DocumentChunk) -> None:
+    try:
+        embedding = json.loads(chunk.embedding or "[]")
+        if not embedding:
+            embedding = make_embedding(chunk.chunk_text)
+            chunk.embedding = json.dumps(embedding, ensure_ascii=False)
+            db.flush()
+        metadata = json.loads(chunk.metadata_json or "{}")
+        metadata.update(
+            {
+                "page_number": chunk.page_number,
+                "start_time": chunk.start_time,
+                "end_time": chunk.end_time,
+                "section_title": chunk.section_title,
+                "source_url": chunk.source_url,
+                "chunk_index": chunk.chunk_index,
+            }
+        )
+        clean_metadata = {key: value for key, value in metadata.items() if value is not None}
+        rag_service.index_chunk(
+            chunk_id=chunk.id,
+            document_id=chunk.document_id,
+            course_id=chunk.course_id,
+            text=chunk.chunk_text,
+            embedding=[float(value) for value in embedding],
+            metadata=clean_metadata,
+        )
+    except Exception:
+        # The database row remains usable as a fallback if Chroma or local models are unavailable.
+        return
+
+
 def retrieve_relevant_chunks(db: Session, course_id: int, query: str, limit: int = 5) -> list[tuple[DocumentChunk, float]]:
+    try:
+        candidates = rag_service.query(course_id, query, candidates=30)
+        reranked = rag_service.rerank(query, candidates, limit=limit)
+        retrieved: list[tuple[DocumentChunk, float]] = []
+        for item in reranked:
+            metadata = item.get("metadata") or {}
+            chunk_id = int(metadata.get("chunk_id") or 0)
+            chunk = db.get(DocumentChunk, chunk_id)
+            if chunk is not None:
+                score = float(item.get("rerank_score") or item.get("dot_score") or 0.0)
+                retrieved.append((chunk, score))
+        if retrieved:
+            return retrieved
+    except Exception:
+        pass
+
     query_vector = make_embedding(query)
     chunks = db.scalars(
         select(DocumentChunk)
@@ -870,6 +911,64 @@ def extract_pdf_with_docling(path: Path) -> str:
     return extract_document_with_docling(path)
 
 
+def extract_pdf_with_pymupdf4llm(path: Path) -> str:
+    try:
+        import pymupdf4llm
+    except ImportError as exc:
+        raise RuntimeError("后端缺少 pymupdf4llm，请先安装 requirements.txt") from exc
+
+    markdown = pymupdf4llm.to_markdown(str(path)).strip()
+    if not markdown:
+        raise RuntimeError("pymupdf4llm 没有从 PDF 中提取到可用文本。")
+    return markdown
+
+
+def extract_pdf_with_paddleocr(path: Path) -> str:
+    try:
+        # ModelScope may import torch after paddle; on Windows that can trip DLL load order.
+        import torch  # noqa: F401
+        import fitz
+        import numpy as np
+        from paddleocr import PaddleOCR
+    except ImportError as exc:
+        raise RuntimeError("后端缺少 PaddleOCR，请先安装 paddleocr 和 paddlepaddle") from exc
+
+    ocr = PaddleOCR(
+        lang="ch",
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+    )
+    page_texts: list[str] = []
+    with fitz.open(path) as pdf:
+        for page_index, page in enumerate(pdf, start=1):
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)
+            result = ocr.predict(
+                image,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+            lines: list[str] = []
+            for page_result in result or []:
+                if isinstance(page_result, dict):
+                    rec_texts = page_result.get("rec_texts")
+                    if isinstance(rec_texts, list):
+                        lines.extend(str(item).strip() for item in rec_texts if str(item).strip())
+                elif hasattr(page_result, "get"):
+                    rec_texts = page_result.get("rec_texts")
+                    if isinstance(rec_texts, list):
+                        lines.extend(str(item).strip() for item in rec_texts if str(item).strip())
+            page_text = "\n".join(line for line in lines if line)
+            if page_text:
+                page_texts.append(f"第 {page_index} 页\n{page_text}")
+    structured_text = "\n\n".join(page_texts).strip()
+    if not structured_text:
+        raise RuntimeError("PaddleOCR 没有从 PDF 中识别到可用文本。")
+    return structured_text
+
+
 def find_chunk_page_number(chunk_text: str, pages: list[dict[str, object]]) -> int | None:
     normalized_chunk = normalize_for_page_match(chunk_text)
     if not normalized_chunk:
@@ -894,6 +993,10 @@ def save_document_chunks(
     source_type: str,
     pages: list[dict[str, object]] | None = None,
 ) -> int:
+    try:
+        rag_service.delete_document(document.id)
+    except Exception:
+        pass
     db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
     chunk_index = 0
     chunks = split_text_to_chunks(structured_text)
@@ -916,40 +1019,49 @@ def save_document_chunks(
         if page_number:
             metadata["page_number"] = page_number
 
-        db.add(
-            DocumentChunk(
-                document_id=document.id,
-                course_id=document.course_id,
-                chunk_text=chunk_text,
-                page_number=page_number,
-                start_time=None,
-                end_time=None,
-                section_title=section_title,
-                source_url=None,
-                metadata_json=json.dumps(metadata, ensure_ascii=False),
-                token_count=len(chunk_text),
-                chunk_index=chunk_index,
-                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-            )
+        chunk = DocumentChunk(
+            document_id=document.id,
+            course_id=document.course_id,
+            chunk_text=chunk_text,
+            page_number=page_number,
+            start_time=None,
+            end_time=None,
+            section_title=section_title,
+            source_url=None,
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+            token_count=len(chunk_text),
+            chunk_index=chunk_index,
+            embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
         )
+        db.add(chunk)
+        db.flush()
+        index_chunk_in_chroma(db, chunk)
         chunk_index += 1
     return chunk_index
 
 
-def process_pdf_document(db: Session, document: Document, parser: str = "pymupdf") -> None:
+def process_pdf_document(db: Session, document: Document, parser: str = "paddleocr") -> None:
     document.status = "processing"
     document.parse_status = "processing"
-    document.progress_stage = "pymupdf_extract_pdf" if parser == "pymupdf" else "docling_extract_pdf"
+    document.progress_stage = f"{parser}_extract_pdf"
     document.error_message = None
     db.commit()
 
     try:
         path = Path(document.storage_path)
         pages: list[dict[str, object]] = []
-        parser_name = parser if parser in {"docling", "pymupdf"} else "docling"
+        parser_name = parser if parser in {"docling", "pymupdf", "pymupdf4llm", "paddleocr"} else "paddleocr"
         if parser_name == "pymupdf":
             pages = extract_pdf_pages(path)
             structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+        elif parser_name == "pymupdf4llm":
+            structured_text = extract_pdf_with_pymupdf4llm(path)
+            try:
+                pages = extract_pdf_pages(path)
+            except Exception:
+                pages = []
+        elif parser_name == "paddleocr":
+            structured_text = extract_pdf_with_paddleocr(path)
         else:
             try:
                 structured_text = extract_pdf_with_docling(path)
@@ -1342,6 +1454,10 @@ def health(db: Session = Depends(get_db)) -> dict[str, object]:
     return {
         "status": "ok",
         "database": "connected",
+        "rag_vector_store": "chroma" if rag_service.ready() else "unavailable",
+        "embedding_model": settings.embedding_model,
+        "reranker_model": settings.reranker_model,
+        "rag_device": rag_service.device(),
         "ai_provider": settings.ai_provider if ai_service.enabled else "mock",
         "ai_model": settings.ai_model,
     }
@@ -1544,6 +1660,10 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     documents = db.scalars(select(Document).where(Document.course_id == course_id)).all()
     deleted_files = 0
     for document in documents:
+        try:
+            rag_service.delete_document(document.id)
+        except Exception:
+            pass
         if delete_uploaded_file(document.storage_path):
             deleted_files += 1
 
@@ -1572,7 +1692,7 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
 @app.post("/documents/upload")
 async def upload_document(
     course_id: int = 1,
-    parser: Literal["pymupdf", "docling"] = "pymupdf",
+    parser: Literal["pymupdf", "pymupdf4llm", "paddleocr", "docling"] = "paddleocr",
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
@@ -1698,6 +1818,10 @@ def process_video_document(db: Session, document: Document, preferred_language: 
         document.language = language
         document.subtitle_type = subtitle_type
         document.progress_stage = "chunk_and_embed"
+        try:
+            rag_service.delete_document(document.id)
+        except Exception:
+            pass
         db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         chunks = merge_segments_to_chunks(segments)
         for index, chunk in enumerate(chunks):
@@ -1705,31 +1829,32 @@ def process_video_document(db: Session, document: Document, preferred_language: 
             start_time = float(chunk["start"])
             end_time = float(chunk["end"])
             timestamp_url = build_timestamp_url(document.source_url, start_time)
-            db.add(
-                DocumentChunk(
-                    document_id=document.id,
-                    course_id=document.course_id,
-                    chunk_text=chunk_text,
-                    page_number=None,
-                    start_time=start_time,
-                    end_time=end_time,
-                    section_title=f"{format_time(start_time)} - {format_time(end_time)}",
-                    source_url=timestamp_url,
-                    metadata_json=json.dumps(
-                        {
-                            "resource_title": document.filename,
-                            "platform": document.platform,
-                            "subtitle_type": subtitle_type,
-                            "language": language,
-                            "source_url": timestamp_url,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    token_count=len(chunk_text),
-                    chunk_index=index,
-                    embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-                )
+            db_chunk = DocumentChunk(
+                document_id=document.id,
+                course_id=document.course_id,
+                chunk_text=chunk_text,
+                page_number=None,
+                start_time=start_time,
+                end_time=end_time,
+                section_title=f"{format_time(start_time)} - {format_time(end_time)}",
+                source_url=timestamp_url,
+                metadata_json=json.dumps(
+                    {
+                        "resource_title": document.filename,
+                        "platform": document.platform,
+                        "subtitle_type": subtitle_type,
+                        "language": language,
+                        "source_url": timestamp_url,
+                    },
+                    ensure_ascii=False,
+                ),
+                token_count=len(chunk_text),
+                chunk_index=index,
+                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
             )
+            db.add(db_chunk)
+            db.flush()
+            index_chunk_in_chroma(db, db_chunk)
 
         document.status = "ready"
         document.parse_status = "ready"
@@ -1891,31 +2016,37 @@ def create_webpage_resource(course_id: int, payload: WebResourceCreate, db: Sess
         document.filename = str(extracted["title"])[:255]
         document.raw_content = str(extracted["text"])
         document.progress_stage = "chunk_and_embed"
+        try:
+            rag_service.delete_document(document.id)
+        except Exception:
+            pass
+        db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         chunks = split_text_to_chunks(str(extracted["text"]))
         for index, chunk_text in enumerate(chunks):
-            db.add(
-                DocumentChunk(
-                    document_id=document.id,
-                    course_id=course_id,
-                    chunk_text=chunk_text,
-                    page_number=None,
-                    start_time=None,
-                    end_time=None,
-                    section_title=f"网页片段 {index + 1}",
-                    source_url=url,
-                    metadata_json=json.dumps(
-                        {
-                            "resource_title": document.filename,
-                            "source_type": "webpage",
-                            "source_url": url,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    token_count=len(chunk_text),
-                    chunk_index=index,
-                    embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-                )
+            db_chunk = DocumentChunk(
+                document_id=document.id,
+                course_id=course_id,
+                chunk_text=chunk_text,
+                page_number=None,
+                start_time=None,
+                end_time=None,
+                section_title=f"网页片段 {index + 1}",
+                source_url=url,
+                metadata_json=json.dumps(
+                    {
+                        "resource_title": document.filename,
+                        "source_type": "webpage",
+                        "source_url": url,
+                    },
+                    ensure_ascii=False,
+                ),
+                token_count=len(chunk_text),
+                chunk_index=index,
+                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
             )
+            db.add(db_chunk)
+            db.flush()
+            index_chunk_in_chroma(db, db_chunk)
         document.status = "ready"
         document.parse_status = "ready"
         document.progress_stage = f"completed:{len(chunks)} chunks"
@@ -1968,6 +2099,10 @@ def delete_resource(resource_id: int, db: Session = Depends(get_db)) -> dict[str
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
     deleted_file = delete_uploaded_file(document.storage_path)
+    try:
+        rag_service.delete_document(document.id)
+    except Exception:
+        pass
     db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == resource_id))
     db.delete(document)
     db.commit()

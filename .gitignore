@@ -10,6 +10,10 @@ backend/.env
 backend/.mysql-data/
 backend/.mysql-data-backup-*/
 backend/uploads/
+backend/chroma_db/
+backend/.test_chroma/
+backend/.venv312/
+backend/tmp_*
 
 # Frontend
 node_modules/

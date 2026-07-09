@@ -27,6 +27,7 @@ import { type Course } from './data'
 
 type User = { id: number; username: string; nickname: string | null }
 type ImportStatus = 'idle' | 'loading' | 'success' | 'error'
+type PdfParser = 'paddleocr' | 'pymupdf' | 'pymupdf4llm'
 type MainView = 'courses' | 'detail' | 'upload' | 'settings'
 type DetailTab = 'overview' | 'resources' | 'qa' | 'knowledge' | 'plan' | 'quiz' | 'mistakes' | 'diagnosis' | 'profile'
 type AIConfig = { provider: string; model: string; base_url: string; has_api_key: boolean }
@@ -110,6 +111,29 @@ type PlanFeedback = {
   difficulty: 'easy' | 'normal' | 'hard'
   feedback: string
 }
+
+const pdfParserOptions: Array<{ value: PdfParser; label: string; description: string; loadingMessage: string }> = [
+  {
+    value: 'paddleocr',
+    label: 'PaddleOCR',
+    description: '默认 OCR，适合扫描版或图片型 PDF。',
+    loadingMessage: '正在用 PaddleOCR 识别 PDF，可能较慢...',
+  },
+  {
+    value: 'pymupdf',
+    label: 'PyMuPDF',
+    description: '速度最快，适合有文本层的 PDF。',
+    loadingMessage: '正在用 PyMuPDF 快速解析 PDF...',
+  },
+  {
+    value: 'pymupdf4llm',
+    label: 'PyMuPDF4LLM',
+    description: '输出 Markdown，适合普通讲义。',
+    loadingMessage: '正在用 PyMuPDF4LLM 解析 PDF...',
+  },
+]
+
+const pdfParserDetails = Object.fromEntries(pdfParserOptions.map((option) => [option.value, option])) as Record<PdfParser, (typeof pdfParserOptions)[number]>
 
 function statusClass(status: ImportStatus) {
   if (status === 'success') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -1415,6 +1439,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
   const [fileName, setFileName] = useState('')
+  const [pdfParser, setPdfParser] = useState<PdfParser>('paddleocr')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
@@ -1471,9 +1496,10 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     setStatus('loading')
     const suffix = file.name.split('.').pop()?.toLowerCase() || ''
     const isPresentation = suffix === 'ppt' || suffix === 'pptx'
-    const parser = isPresentation ? 'docling' : 'pymupdf'
+    const parser = isPresentation ? 'docling' : pdfParser
     setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
-    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : '正在用 PyMuPDF 快速解析 PDF...')
+    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : pdfParserDetails[pdfParser].loadingMessage)
+    const uploadTimeout = parser === 'paddleocr' ? 600000 : 180000
     const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
     formData.append('file', file)
@@ -1483,7 +1509,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       const result = await resolveCourseForResource(finalName, `由资料 ${file.name} 自动创建`)
       createdCourse = result.course
       created = result.created
-      const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: 180000 }) as unknown as { chunk_count: number; message?: string }
+      const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: uploadTimeout }) as unknown as { chunk_count: number; message?: string }
       setStatus('success')
       setActiveImportKind(null)
       setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 已加入《${createdCourse.name}》，生成 ${uploadResult.chunk_count} 个知识片段。`)
@@ -1771,9 +1797,22 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </div>
             </div>
             <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <p className="font-semibold">PDF 使用 PyMuPDF 快速解析</p>
-              <p className="mt-1 text-xs leading-5 text-emerald-800">适合当前 RAG 问答和知识点生成；Docling PDF 入口已关闭，避免上传后长时间卡住。PPT/PPTX 仍使用 Docling。</p>
+              <p className="font-semibold">PDF 默认使用 PaddleOCR</p>
+              <p className="mt-1 text-xs leading-5 text-emerald-800">可在 PaddleOCR、PyMuPDF、PyMuPDF4LLM 中选择；PPT/PPTX 仍使用 Docling。</p>
             </div>
+            <label className="mt-4 block text-sm font-medium">
+              PDF 解析方式
+              <select
+                value={pdfParser}
+                onChange={(event) => setPdfParser(event.target.value as PdfParser)}
+                className="input-surface mt-2 w-full px-3 py-2.5 outline-none"
+              >
+                {pdfParserOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <p className="mt-2 text-xs leading-5 text-slate-500">{pdfParserDetails[pdfParser].description}</p>
             <label className="primary-action mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold">
               <FileUp size={16} />
               选择文件
