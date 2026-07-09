@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkMath from 'remark-math'
@@ -27,7 +27,7 @@ import { type Course } from './data'
 
 type User = { id: number; username: string; nickname: string | null }
 type ImportStatus = 'idle' | 'loading' | 'success' | 'error'
-type PdfParser = 'paddleocr' | 'pymupdf' | 'pymupdf4llm'
+type PdfParser = 'pymupdf' | 'docling'
 type MainView = 'courses' | 'detail' | 'upload' | 'settings'
 type DetailTab = 'overview' | 'resources' | 'qa' | 'knowledge' | 'plan' | 'quiz' | 'mistakes' | 'diagnosis' | 'profile'
 type AIConfig = { provider: string; model: string; base_url: string; has_api_key: boolean }
@@ -114,22 +114,16 @@ type PlanFeedback = {
 
 const pdfParserOptions: Array<{ value: PdfParser; label: string; description: string; loadingMessage: string }> = [
   {
-    value: 'paddleocr',
-    label: 'PaddleOCR',
-    description: '默认 OCR，适合扫描版或图片型 PDF。',
-    loadingMessage: '正在用 PaddleOCR 识别 PDF，可能较慢...',
-  },
-  {
     value: 'pymupdf',
     label: 'PyMuPDF',
     description: '速度最快，适合有文本层的 PDF。',
     loadingMessage: '正在用 PyMuPDF 快速解析 PDF...',
   },
   {
-    value: 'pymupdf4llm',
-    label: 'PyMuPDF4LLM',
-    description: '输出 Markdown，适合普通讲义。',
-    loadingMessage: '正在用 PyMuPDF4LLM 解析 PDF...',
+    value: 'docling',
+    label: 'Docling',
+    description: '结构化解析，适合版式复杂的 PDF，但耗时更长。',
+    loadingMessage: '正在用 Docling 结构化解析 PDF，可能较慢...',
   },
 ]
 
@@ -1439,7 +1433,8 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
   const [fileName, setFileName] = useState('')
-  const [pdfParser, setPdfParser] = useState<PdfParser>('paddleocr')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [pdfParser, setPdfParser] = useState<PdfParser>('pymupdf')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
@@ -1448,6 +1443,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [lastResource, setLastResource] = useState<Resource | null>(null)
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
   const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (courses.length && !courses.some((course) => course.id === Number(selectedCourseId))) {
@@ -1489,8 +1485,29 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
   }
 
-  async function uploadFile(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
+  function selectFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null
+    setSelectedFile(file)
+    setFileName(file?.name || '')
+    if (!file) return
+    setStatus('idle')
+    setActiveImportKind(null)
+    setMessage('文件已选择。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。')
+  }
+
+  function cancelSelectedFile() {
+    setSelectedFile(null)
+    setFileName('')
+    setActiveImportKind(null)
+    setStatus('idle')
+    setMessage('已取消本次文件选择，文件没有上传，也不会写入知识库。')
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  async function uploadSelectedFile() {
+    const file = selectedFile
     if (!file) return
     setFileName(file.name)
     setStatus('loading')
@@ -1499,7 +1516,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     const parser = isPresentation ? 'docling' : pdfParser
     setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
     setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : pdfParserDetails[pdfParser].loadingMessage)
-    const uploadTimeout = parser === 'paddleocr' ? 600000 : 180000
+    const uploadTimeout = parser === 'docling' ? 300000 : 180000
     const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
     formData.append('file', file)
@@ -1513,6 +1530,10 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       setStatus('success')
       setActiveImportKind(null)
       setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 已加入《${createdCourse.name}》，生成 ${uploadResult.chunk_count} 个知识片段。`)
+      setSelectedFile(null)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
@@ -1797,8 +1818,8 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </div>
             </div>
             <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <p className="font-semibold">PDF 默认使用 PaddleOCR</p>
-              <p className="mt-1 text-xs leading-5 text-emerald-800">可在 PaddleOCR、PyMuPDF、PyMuPDF4LLM 中选择；PPT/PPTX 仍使用 Docling。</p>
+              <p className="font-semibold">PDF 只支持 PyMuPDF / Docling</p>
+              <p className="mt-1 text-xs leading-5 text-emerald-800">PyMuPDF 适合文本层 PDF；Docling 适合结构化解析。PPT/PPTX 固定使用 Docling。</p>
             </div>
             <label className="mt-4 block text-sm font-medium">
               PDF 解析方式
@@ -1813,12 +1834,24 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </select>
             </label>
             <p className="mt-2 text-xs leading-5 text-slate-500">{pdfParserDetails[pdfParser].description}</p>
-            <label className="primary-action mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold">
+            <label className={`primary-action mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${status === 'loading' ? 'cursor-not-allowed bg-slate-400' : 'cursor-pointer'}`}>
               <FileUp size={16} />
               选择文件
-              <input type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={uploadFile} />
+              <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={selectFile} disabled={status === 'loading'} />
             </label>
             <p className="mt-2 text-sm text-slate-500">{fileName || '尚未选择文件，支持 PDF、PPT、PPTX'}</p>
+            {selectedFile && (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button onClick={() => void uploadSelectedFile()} disabled={status === 'loading'} className="primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
+                  {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+                  开始处理
+                </button>
+                <button type="button" onClick={cancelSelectedFile} disabled={status === 'loading'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-red-200 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-400">
+                  <Trash2 size={16} />
+                  取消上传
+                </button>
+              </div>
+            )}
           </Panel>
           <Panel>
             <div className="flex items-center gap-3">

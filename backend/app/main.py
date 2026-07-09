@@ -911,64 +911,6 @@ def extract_pdf_with_docling(path: Path) -> str:
     return extract_document_with_docling(path)
 
 
-def extract_pdf_with_pymupdf4llm(path: Path) -> str:
-    try:
-        import pymupdf4llm
-    except ImportError as exc:
-        raise RuntimeError("后端缺少 pymupdf4llm，请先安装 requirements.txt") from exc
-
-    markdown = pymupdf4llm.to_markdown(str(path)).strip()
-    if not markdown:
-        raise RuntimeError("pymupdf4llm 没有从 PDF 中提取到可用文本。")
-    return markdown
-
-
-def extract_pdf_with_paddleocr(path: Path) -> str:
-    try:
-        # ModelScope may import torch after paddle; on Windows that can trip DLL load order.
-        import torch  # noqa: F401
-        import fitz
-        import numpy as np
-        from paddleocr import PaddleOCR
-    except ImportError as exc:
-        raise RuntimeError("后端缺少 PaddleOCR，请先安装 paddleocr 和 paddlepaddle") from exc
-
-    ocr = PaddleOCR(
-        lang="ch",
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-    )
-    page_texts: list[str] = []
-    with fitz.open(path) as pdf:
-        for page_index, page in enumerate(pdf, start=1):
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)
-            result = ocr.predict(
-                image,
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-            )
-            lines: list[str] = []
-            for page_result in result or []:
-                if isinstance(page_result, dict):
-                    rec_texts = page_result.get("rec_texts")
-                    if isinstance(rec_texts, list):
-                        lines.extend(str(item).strip() for item in rec_texts if str(item).strip())
-                elif hasattr(page_result, "get"):
-                    rec_texts = page_result.get("rec_texts")
-                    if isinstance(rec_texts, list):
-                        lines.extend(str(item).strip() for item in rec_texts if str(item).strip())
-            page_text = "\n".join(line for line in lines if line)
-            if page_text:
-                page_texts.append(f"第 {page_index} 页\n{page_text}")
-    structured_text = "\n\n".join(page_texts).strip()
-    if not structured_text:
-        raise RuntimeError("PaddleOCR 没有从 PDF 中识别到可用文本。")
-    return structured_text
-
-
 def find_chunk_page_number(chunk_text: str, pages: list[dict[str, object]]) -> int | None:
     normalized_chunk = normalize_for_page_match(chunk_text)
     if not normalized_chunk:
@@ -1040,7 +982,7 @@ def save_document_chunks(
     return chunk_index
 
 
-def process_pdf_document(db: Session, document: Document, parser: str = "paddleocr") -> None:
+def process_pdf_document(db: Session, document: Document, parser: str = "pymupdf") -> None:
     document.status = "processing"
     document.parse_status = "processing"
     document.progress_stage = f"{parser}_extract_pdf"
@@ -1050,18 +992,10 @@ def process_pdf_document(db: Session, document: Document, parser: str = "paddleo
     try:
         path = Path(document.storage_path)
         pages: list[dict[str, object]] = []
-        parser_name = parser if parser in {"docling", "pymupdf", "pymupdf4llm", "paddleocr"} else "paddleocr"
+        parser_name = parser if parser in {"docling", "pymupdf"} else "pymupdf"
         if parser_name == "pymupdf":
             pages = extract_pdf_pages(path)
             structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
-        elif parser_name == "pymupdf4llm":
-            structured_text = extract_pdf_with_pymupdf4llm(path)
-            try:
-                pages = extract_pdf_pages(path)
-            except Exception:
-                pages = []
-        elif parser_name == "paddleocr":
-            structured_text = extract_pdf_with_paddleocr(path)
         else:
             try:
                 structured_text = extract_pdf_with_docling(path)
@@ -1692,7 +1626,7 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
 @app.post("/documents/upload")
 async def upload_document(
     course_id: int = 1,
-    parser: Literal["pymupdf", "pymupdf4llm", "paddleocr", "docling"] = "paddleocr",
+    parser: Literal["pymupdf", "docling"] = "pymupdf",
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
