@@ -3,15 +3,65 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 
-$Python = "C:\Users\fox\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+$BundledPython = "C:\Users\fox\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+$VenvPython = Join-Path $ProjectRoot ".venv-win\Scripts\python.exe"
+$Requirements = Join-Path $ProjectRoot "requirements.txt"
+$RequirementsStamp = Join-Path $ProjectRoot ".venv-win\.requirements.stamp"
 
-if (!(Test-Path ".venv-win")) {
-  & $Python -m venv .venv-win
+function Get-BasePython {
+  if (Test-Path $BundledPython) {
+    return $BundledPython
+  }
+
+  $PyLauncher = Get-Command py -ErrorAction SilentlyContinue
+  if ($PyLauncher) {
+    return $PyLauncher.Source
+  }
+
+  $SystemPython = Get-Command python -ErrorAction SilentlyContinue
+  if ($SystemPython) {
+    return $SystemPython.Source
+  }
+
+  throw "Python was not found. Install Python 3.12 or run this from Codex where the bundled Python is available."
 }
 
-.\.venv-win\Scripts\python.exe -m pip install -r requirements.txt
+if (!(Test-Path ".venv-win")) {
+  $BasePython = Get-BasePython
+  & $BasePython -m venv .venv-win
+}
+
+$NeedsInstall = !(Test-Path $RequirementsStamp)
+if (!$NeedsInstall) {
+  $NeedsInstall = (Get-Item $Requirements).LastWriteTimeUtc -gt (Get-Item $RequirementsStamp).LastWriteTimeUtc
+}
+
+if ($NeedsInstall) {
+  Write-Host "Installing backend dependencies..." -ForegroundColor Cyan
+  & $VenvPython -m pip install --disable-pip-version-check -r requirements.txt
+  Set-Content -Path $RequirementsStamp -Value (Get-Date).ToString("o")
+} else {
+  Write-Host "Backend dependencies are up to date." -ForegroundColor DarkGray
+}
 
 .\start_database.ps1
+
+function Get-BackendHealth {
+  try {
+    return Invoke-RestMethod -UseBasicParsing http://127.0.0.1:8000/health -TimeoutSec 3
+  } catch {
+    return $null
+  }
+}
+
+function Test-CurrentBackend {
+  param($Health)
+
+  return $Health -and
+    $Health.status -eq "ok" -and
+    $Health.rag_vector_store -eq "chroma" -and
+    $Health.embedding_model
+}
 
 function Stop-BackendPort {
   $PortPids = netstat -ano |
@@ -34,24 +84,17 @@ function Stop-BackendPort {
   }
 }
 
-try {
-  $Health = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/health -TimeoutSec 3
-  if ($Health.StatusCode -eq 200) {
-    $OpenApi = Invoke-RestMethod -UseBasicParsing http://127.0.0.1:8000/openapi.json -TimeoutSec 3
-    $SettingsAiPath = $OpenApi.paths.PSObject.Properties["/settings/ai"]
-    $HasDeleteAiConfig = $SettingsAiPath -and $SettingsAiPath.Value.PSObject.Properties["delete"]
+$Health = Get-BackendHealth
+if (Test-CurrentBackend $Health) {
+  Write-Host "Backend is already running at http://127.0.0.1:8000/health" -ForegroundColor Green
+  Write-Host "RAG: $($Health.rag_vector_store), embedding: $($Health.embedding_model), reranker: $($Health.reranker_model), device: $($Health.rag_device)" -ForegroundColor Green
+  exit 0
+}
 
-    if ($HasDeleteAiConfig) {
-      Write-Host "Backend is already running at http://127.0.0.1:8000/health" -ForegroundColor Green
-      exit 0
-    }
-
-    Write-Host "Port 8000 is running an old backend. Restarting it..." -ForegroundColor Yellow
-    Stop-BackendPort
-    Start-Sleep -Seconds 2
-  }
-} catch {
-  # Port 8000 is not serving this backend yet; continue and start Uvicorn.
+if ($Health) {
+  Write-Host "Port 8000 is running a different backend. Restarting it..." -ForegroundColor Yellow
+  Stop-BackendPort
+  Start-Sleep -Seconds 2
 }
 
 try {
@@ -64,4 +107,4 @@ try {
 }
 
 Write-Host "Backend will listen on 0.0.0.0:8000. Open http://127.0.0.1:8000/health locally." -ForegroundColor Cyan
-.\.venv-win\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+& $VenvPython -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
