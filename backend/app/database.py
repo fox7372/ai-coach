@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     deepseek_base_url: str | None = None
     deepseek_model: str | None = None
     chroma_persist_dir: str = "backend/chroma_db"
-    chroma_collection: str = "course_document_chunks"
-    embedding_model: str = "BAAI/bge-base-zh-v1.5"
+    chroma_collection: str = "course_document_chunks_bge_small_zh_v15"
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
     reranker_model: str = "BAAI/bge-reranker-base"
     rag_device: str = "auto"
     env_file_path: str = ".env"

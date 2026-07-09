@@ -399,6 +399,13 @@ def make_embedding(text_value: str) -> list[float]:
         return hash_embedding(text_value)
 
 
+def make_embeddings(text_values: list[str]) -> list[list[float]]:
+    try:
+        return rag_service.embed_texts(text_values)
+    except Exception:
+        return [hash_embedding(text_value) for text_value in text_values]
+
+
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left or not right:
         return 0.0
@@ -435,6 +442,45 @@ def index_chunk_in_chroma(db: Session, chunk: DocumentChunk) -> None:
         )
     except Exception:
         # The database row remains usable as a fallback if Chroma or local models are unavailable.
+        return
+
+
+def index_chunks_in_chroma(chunks: list[DocumentChunk]) -> None:
+    items: list[dict[str, object]] = []
+    for chunk in chunks:
+        try:
+            embedding = json.loads(chunk.embedding or "[]")
+            metadata = json.loads(chunk.metadata_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not embedding:
+            continue
+        metadata.update(
+            {
+                "chunk_id": chunk.id,
+                "document_id": chunk.document_id,
+                "course_id": chunk.course_id,
+                "page_number": chunk.page_number,
+                "start_time": chunk.start_time,
+                "end_time": chunk.end_time,
+                "section_title": chunk.section_title,
+                "source_url": chunk.source_url,
+                "chunk_index": chunk.chunk_index,
+            }
+        )
+        clean_metadata = {key: value for key, value in metadata.items() if value is not None}
+        items.append(
+            {
+                "id": f"chunk-{chunk.id}",
+                "text": chunk.chunk_text,
+                "embedding": [float(value) for value in embedding],
+                "metadata": clean_metadata,
+            }
+        )
+
+    try:
+        rag_service.index_chunks(items)
+    except Exception:
         return
 
 
@@ -945,7 +991,9 @@ def save_document_chunks(
     if not chunks:
         raise RuntimeError("资料没有切分出可用片段。")
 
-    for chunk_text in chunks:
+    embeddings = make_embeddings(chunks)
+    pending_index: list[DocumentChunk] = []
+    for chunk_text, embedding in zip(chunks, embeddings):
         page_number = find_chunk_page_number(chunk_text, pages or []) if pages else None
         if page_number:
             section_title = f"第 {page_number} 页片段"
@@ -977,12 +1025,13 @@ def save_document_chunks(
             metadata_json=json.dumps(metadata, ensure_ascii=False),
             token_count=len(chunk_text),
             chunk_index=chunk_index,
-            embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
+            embedding=json.dumps(embedding, ensure_ascii=False),
         )
         db.add(chunk)
         db.flush()
-        index_chunk_in_chroma(db, chunk)
+        pending_index.append(chunk)
         chunk_index += 1
+    index_chunks_in_chroma(pending_index)
     return chunk_index
 
 

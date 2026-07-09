@@ -40,19 +40,23 @@ def test_ladr_pdf_parse_chunk_and_index(monkeypatch):
         # verifies the real transformers model separately when explicitly enabled.
         return [float(len(text) % 7), float(len(text) % 11), 1.0]
 
-    def fake_index_chunk(db: Session, chunk: DocumentChunk) -> None:
-        indexed_chunks.append(
-            {
-                "chunk_id": chunk.id,
-                "document_id": chunk.document_id,
-                "course_id": chunk.course_id,
-                "text": chunk.chunk_text,
-                "embedding": json.loads(chunk.embedding or "[]"),
-            }
-        )
+    def fake_embeddings(texts: list[str]) -> list[list[float]]:
+        return [fake_embedding(text) for text in texts]
 
-    monkeypatch.setattr(main, "make_embedding", fake_embedding)
-    monkeypatch.setattr(main, "index_chunk_in_chroma", fake_index_chunk)
+    def fake_index_chunks(chunks: list[DocumentChunk]) -> None:
+        for chunk in chunks:
+            indexed_chunks.append(
+                {
+                    "chunk_id": chunk.id,
+                    "document_id": chunk.document_id,
+                    "course_id": chunk.course_id,
+                    "text": chunk.chunk_text,
+                    "embedding": json.loads(chunk.embedding or "[]"),
+                }
+            )
+
+    monkeypatch.setattr(main, "make_embeddings", fake_embeddings)
+    monkeypatch.setattr(main, "index_chunks_in_chroma", fake_index_chunks)
 
     with Session(engine) as db:
         course = CourseModel(user_id=1, name="线性代数测试课", description="LADR 中文版 RAG 测试")
@@ -96,13 +100,15 @@ def test_ladr_pdf_parse_chunk_and_index(monkeypatch):
         assert any("线性" in chunk.chunk_text or "向量" in chunk.chunk_text for chunk in chunks)
 
 
-def test_real_transformers_embedding_dimension_is_768():
+def test_real_transformers_embedding_dimension_matches_configured_model():
     if os.environ.get("RUN_SLOW_RAG_TESTS") != "1":
         pytest.skip("设置 RUN_SLOW_RAG_TESTS=1 后验证真实 transformers embedding 模型")
 
+    from app.database import settings
     from app.rag_service import rag_service
 
     vector = rag_service.embed_text("线性代数中的向量空间是什么？")
 
-    assert len(vector) == 768
+    expected_dimensions = 512 if "small" in settings.embedding_model else 768
+    assert len(vector) == expected_dimensions
     assert all(isinstance(value, float) for value in vector)

@@ -79,21 +79,33 @@ class RAGService:
         return summed / counts
 
     def embed_text(self, text: str) -> list[float]:
+        return self.embed_texts([text])[0]
+
+    def embed_texts(self, texts: list[str], batch_size: int = 16) -> list[list[float]]:
+        if not texts:
+            return []
+
         torch = self._load_torch()
         tokenizer, model = self._load_embedding_model()
-        inputs = tokenizer(
-            text,
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt",
-        )
-        inputs = {key: value.to(self._device()) for key, value in inputs.items()}
-        with torch.no_grad():
-            outputs = model(**inputs)
-            pooled = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
-            pooled = torch.nn.functional.normalize(pooled, p=2, dim=1)
-        return [float(item) for item in pooled[0].detach().cpu().tolist()]
+        embeddings: list[list[float]] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            inputs = tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            inputs = {key: value.to(self._device()) for key, value in inputs.items()}
+            with torch.no_grad():
+                outputs = model(**inputs)
+                pooled = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
+                pooled = torch.nn.functional.normalize(pooled, p=2, dim=1)
+            embeddings.extend(
+                [[float(item) for item in vector] for vector in pooled.detach().cpu().tolist()]
+            )
+        return embeddings
 
     @staticmethod
     def dot_product(left: list[float], right: list[float]) -> float:
@@ -121,6 +133,17 @@ class RAGService:
             documents=[text],
             embeddings=[embedding],
             metadatas=[chroma_metadata],
+        )
+
+    def index_chunks(self, chunks: list[dict[str, object]]) -> None:
+        if not chunks:
+            return
+
+        self.collection().upsert(
+            ids=[str(item["id"]) for item in chunks],
+            documents=[str(item["text"]) for item in chunks],
+            embeddings=[item["embedding"] for item in chunks],
+            metadatas=[item["metadata"] for item in chunks],
         )
 
     def delete_document(self, document_id: int) -> None:
