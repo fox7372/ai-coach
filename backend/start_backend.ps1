@@ -48,7 +48,7 @@ if ($NeedsInstall) {
 
 function Get-BackendHealth {
   try {
-    return Invoke-RestMethod -UseBasicParsing http://127.0.0.1:8000/health -TimeoutSec 3
+    return Invoke-RestMethod -UseBasicParsing http://127.0.0.1:8000/health -TimeoutSec 10
   } catch {
     return $null
   }
@@ -97,13 +97,15 @@ if ($Health) {
   Start-Sleep -Seconds 2
 }
 
-try {
-  $PortCheck = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/health -TimeoutSec 2
-  if ($PortCheck.StatusCode -eq 200) {
-    throw "Port 8000 is still occupied by another backend. Close the old backend process or restart Windows, then run this script again."
-  }
-} catch [System.Net.WebException] {
-  # Port 8000 is free or not serving HTTP; continue.
+$PortCheck = Get-BackendHealth
+if (Test-CurrentBackend $PortCheck) {
+  Write-Host "Backend is already running at http://127.0.0.1:8000/health" -ForegroundColor Green
+  Write-Host "RAG: $($PortCheck.rag_vector_store), embedding: $($PortCheck.embedding_model), reranker: $($PortCheck.reranker_model), device: $($PortCheck.rag_device)" -ForegroundColor Green
+  exit 0
+}
+
+if ($PortCheck) {
+  throw "Port 8000 is still occupied by another backend. Close the old backend process or restart Windows, then run this script again."
 }
 
 Write-Host "Backend will listen on 0.0.0.0:8000. Open http://127.0.0.1:8000/health locally." -ForegroundColor Cyan
