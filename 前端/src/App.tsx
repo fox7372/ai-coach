@@ -7,6 +7,7 @@ import {
   BookOpen,
   BrainCircuit,
   CheckCircle2,
+  Clock,
   ClipboardList,
   FileText,
   FileUp,
@@ -128,6 +129,49 @@ const pdfParserOptions: Array<{ value: PdfParser; label: string; description: st
 ]
 
 const pdfParserDetails = Object.fromEntries(pdfParserOptions.map((option) => [option.value, option])) as Record<PdfParser, (typeof pdfParserOptions)[number]>
+
+type ImportEstimate = {
+  label: string
+  detail: string
+  maxSeconds: number
+}
+
+function formatDuration(seconds: number) {
+  if (seconds < 60) return `约 ${Math.max(10, Math.round(seconds / 10) * 10)} 秒`
+  const minutes = Math.max(1, Math.round(seconds / 60))
+  if (minutes < 60) return `约 ${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `约 ${hours} 小时 ${rest} 分钟` : `约 ${hours} 小时`
+}
+
+function formatDurationRange(minSeconds: number, maxSeconds: number) {
+  const minText = formatDuration(minSeconds).replace(/^约 /, '')
+  const maxText = formatDuration(maxSeconds).replace(/^约 /, '')
+  if (minText === maxText) return `约 ${minText}`
+  return `约 ${minText} - ${maxText}`
+}
+
+function estimateImportTime(file: File, parser: PdfParser): ImportEstimate {
+  const suffix = file.name.split('.').pop()?.toLowerCase() || ''
+  const sizeMb = Math.max(0.2, file.size / 1024 / 1024)
+  const isPresentation = suffix === 'ppt' || suffix === 'pptx'
+  const effectiveParser: PdfParser = isPresentation ? 'docling' : parser
+
+  const expectedSeconds = effectiveParser === 'pymupdf'
+    ? 25 + sizeMb * 32
+    : 75 + sizeMb * 70
+  const minSeconds = Math.max(20, expectedSeconds * 0.75)
+  const maxSeconds = Math.max(45, expectedSeconds * 1.45)
+
+  return {
+    label: formatDurationRange(minSeconds, maxSeconds),
+    maxSeconds,
+    detail: effectiveParser === 'pymupdf'
+      ? 'PyMuPDF 提取通常很快，主要时间花在切块、生成向量和写入知识库。'
+      : 'Docling 会做结构化解析，再切块、生成向量并写入知识库，耗时波动更大。',
+  }
+}
 
 function statusClass(status: ImportStatus) {
   if (status === 'success') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -1444,6 +1488,12 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
   const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const selectedFileEstimate = useMemo(() => selectedFile ? estimateImportTime(selectedFile, pdfParser) : null, [selectedFile, pdfParser])
+
+  useEffect(() => {
+    if (!selectedFile || !selectedFileEstimate || status !== 'idle') return
+    setMessage(`文件已选择，预计处理 ${selectedFileEstimate.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
+  }, [selectedFile, selectedFileEstimate, status])
 
   useEffect(() => {
     if (courses.length && !courses.some((course) => course.id === Number(selectedCourseId))) {
@@ -1490,9 +1540,10 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     setSelectedFile(file)
     setFileName(file?.name || '')
     if (!file) return
+    const estimate = estimateImportTime(file, pdfParser)
     setStatus('idle')
     setActiveImportKind(null)
-    setMessage('文件已选择。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。')
+    setMessage(`文件已选择，预计处理 ${estimate.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
   }
 
   function cancelSelectedFile() {
@@ -1514,9 +1565,10 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     const suffix = file.name.split('.').pop()?.toLowerCase() || ''
     const isPresentation = suffix === 'ppt' || suffix === 'pptx'
     const parser = isPresentation ? 'docling' : pdfParser
+    const estimate = estimateImportTime(file, pdfParser)
     setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
-    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : pdfParserDetails[pdfParser].loadingMessage)
-    const uploadTimeout = parser === 'docling' ? 300000 : 180000
+    setMessage(`${isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : pdfParserDetails[pdfParser].loadingMessage} 预计 ${estimate.label}。`)
+    const uploadTimeout = Math.max(parser === 'docling' ? 300000 : 180000, Math.ceil(estimate.maxSeconds * 1000 + 60000))
     const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
     const formData = new FormData()
     formData.append('file', file)
@@ -1840,6 +1892,15 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={selectFile} disabled={status === 'loading'} />
             </label>
             <p className="mt-2 text-sm text-slate-500">{fileName || '尚未选择文件，支持 PDF、PPT、PPTX'}</p>
+            {selectedFileEstimate && (
+              <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Clock size={16} />
+                  预计处理时间：{selectedFileEstimate.label}
+                </div>
+                <p className="mt-1 text-xs leading-5 text-sky-800">{selectedFileEstimate.detail}</p>
+              </div>
+            )}
             {selectedFile && (
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button onClick={() => void uploadSelectedFile()} disabled={status === 'loading'} className="primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
