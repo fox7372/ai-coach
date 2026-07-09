@@ -1400,10 +1400,19 @@ def ensure_resource_schema() -> None:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 
-def ensure_default_chat_session(db: Session, user_id: int, course_id: int) -> ChatSession:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id, CourseModel.user_id == user_id))
+def require_course(db: Session, course_id: int, user_id: int | None = None) -> CourseModel:
+    if user_id is None:
+        course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
+    else:
+        course = db.scalar(select(CourseModel).where(CourseModel.id == course_id, CourseModel.user_id == user_id))
     if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或不属于当前用户")
+        detail = "课程不存在或不属于当前用户" if user_id is not None else "课程不存在"
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+    return course
+
+
+def ensure_default_chat_session(db: Session, user_id: int, course_id: int) -> ChatSession:
+    require_course(db, course_id, user_id)
 
     session = db.scalar(
         select(ChatSession)
@@ -1687,6 +1696,7 @@ async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
+    require_course(db, course_id)
     suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
     filename = file.filename or "document.pdf"
     file_type = suffix.lstrip(".").lower()
@@ -1881,9 +1891,7 @@ def preview_video(payload: VideoPreviewRequest) -> dict[str, object]:
 
 @app.post("/api/courses/{course_id}/resources/video", response_model=ResourceOut)
 def create_video_resource(course_id: int, payload: VideoResourceCreate, db: Session = Depends(get_db)) -> ResourceOut:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    require_course(db, course_id)
 
     url = normalize_video_url(payload.url)
     duplicate = db.scalar(
@@ -1974,9 +1982,7 @@ def extract_webpage(payload: WebExtractRequest) -> dict[str, object]:
 
 @app.post("/api/courses/{course_id}/resources/webpage", response_model=ResourceOut)
 def create_webpage_resource(course_id: int, payload: WebResourceCreate, db: Session = Depends(get_db)) -> ResourceOut:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    require_course(db, course_id)
 
     url = validate_public_url(payload.url)
     duplicate = db.scalar(
@@ -2055,6 +2061,7 @@ def create_webpage_resource(course_id: int, payload: WebResourceCreate, db: Sess
 
 @app.get("/api/courses/{course_id}/resources", response_model=list[ResourceOut])
 def list_course_resources(course_id: int, db: Session = Depends(get_db)) -> list[ResourceOut]:
+    require_course(db, course_id)
     documents = db.scalars(select(Document).where(Document.course_id == course_id).order_by(Document.id.desc())).all()
     return [document_to_resource(db, document) for document in documents]
 
@@ -2115,7 +2122,8 @@ def ai_chat(payload: AIChatRequest, db: Session = Depends(get_db)) -> AskRespons
 
 @app.post("/api/ai/generate-summary")
 def generate_summary(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     context = get_course_context(db, payload.course_id, payload.text)
     summary = ai_service.generate_text(
         "你是课程资料整理助手。请用中文生成结构化学习摘要，包含核心概念、易错点和复习顺序。",
@@ -2126,7 +2134,8 @@ def generate_summary(payload: CourseTaskRequest, db: Session = Depends(get_db)) 
 
 @app.post("/api/ai/extract-knowledge-points")
 def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     source_document = None
     chunks: list[DocumentChunk] = []
     existing_query = select(KnowledgePoint).where(KnowledgePoint.course_id == payload.course_id)
@@ -2286,7 +2295,8 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
 
 @app.post("/api/ai/generate-quiz")
 def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     context = get_course_context(db, payload.course_id, payload.text)
     study_date = date.today().isoformat()
     daily_plan = db.scalar(
@@ -2354,6 +2364,7 @@ def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -
 
 @app.post("/api/ai/analyze-mistake")
 def analyze_mistake(payload: MistakeAnalyzeRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     result = ai_service.generate_text(
         "你是错题分析助手。请用中文分析错误原因、薄弱知识点、订正建议和下一步练习。",
         (
@@ -2390,9 +2401,7 @@ def analyze_mistake(payload: MistakeAnalyzeRequest, db: Session = Depends(get_db
     )
     db.add(mistake)
 
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        course.mastery = max(0, min(100, course.mastery - 5))
+    course.mastery = max(0, min(100, course.mastery - 5))
 
     db.commit()
     db.refresh(mistake)
@@ -2493,6 +2502,7 @@ def analyze_mistake_image_upload(
 def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     if not payload.question_text.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先确认或输入题目文字")
+    course = require_course(db, payload.course_id, payload.user_id)
 
     result = ai_service.generate_text(
         "你是错题图片分析助手。请用中文分析题目、解题步骤、错误原因、薄弱知识点和下一步练习建议。"
@@ -2518,9 +2528,7 @@ def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Dep
         )
         db.add(mistake)
 
-        course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
-        if course is not None:
-            course.mastery = max(0, min(100, course.mastery - 5))
+        course.mastery = max(0, min(100, course.mastery - 5))
 
         db.commit()
         db.refresh(mistake)
@@ -2531,6 +2539,7 @@ def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Dep
 
 @app.post("/api/quiz/submit-answer")
 def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     question = db.scalar(select(Question).where(Question.id == payload.question_id, Question.course_id == payload.course_id))
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题目不存在")
@@ -2554,10 +2563,8 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
         ai_feedback=analysis,
     )
     db.add(answer_record)
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        course.mastery = max(0, min(100, course.mastery + (3 if is_correct else -5)))
-        course.progress = max(course.progress, 10)
+    course.mastery = max(0, min(100, course.mastery + (3 if is_correct else -5)))
+    course.progress = max(course.progress, 10)
     db.flush()
 
     mistake = None
@@ -2587,6 +2594,7 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
 
 @app.post("/api/quiz/evaluate-answer")
 def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     question = db.scalar(select(Question).where(Question.id == payload.question_id, Question.course_id == payload.course_id))
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题目不存在")
@@ -2617,10 +2625,8 @@ def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_d
         ai_feedback=result,
     )
     db.add(answer_record)
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        course.mastery = max(0, min(100, course.mastery + (2 if is_exact else 0)))
-        course.progress = max(course.progress, 10)
+    course.mastery = max(0, min(100, course.mastery + (2 if is_exact else 0)))
+    course.progress = max(course.progress, 10)
     db.commit()
     db.refresh(answer_record)
     return {
@@ -2635,6 +2641,7 @@ def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_d
 def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     query = select(AnswerRecord, Question).join(Question, AnswerRecord.question_id == Question.id).where(AnswerRecord.user_id == user_id)
     if course_id is not None:
+        require_course(db, course_id, user_id)
         query = query.where(AnswerRecord.course_id == course_id)
     rows = db.execute(query.order_by(AnswerRecord.id.desc()).limit(50)).all()
     return [
@@ -2657,7 +2664,8 @@ def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db:
 
 @app.post("/api/ai/generate-learning-plan")
 def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     existing = db.scalar(
         select(LearningSuggestion)
         .where(
@@ -2720,7 +2728,8 @@ def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get
 
 
 def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str, feedback: str | None = None) -> LearningSuggestion:
-    course_name = get_course_name(db, course_id)
+    course = require_course(db, course_id, user_id)
+    course_name = course.name
     mistakes = db.scalars(
         select(MistakeRecord)
         .where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)
@@ -2781,6 +2790,7 @@ def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str,
 
 @app.post("/api/ai/daily-learning-plan")
 def get_or_create_daily_learning_plan(payload: DailyPlanRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, payload.course_id, payload.user_id)
     study_date = payload.study_date or date.today().isoformat()
     existing = db.scalar(
         select(LearningSuggestion)
@@ -2800,6 +2810,7 @@ def get_or_create_daily_learning_plan(payload: DailyPlanRequest, db: Session = D
 
 @app.post("/api/ai/update-daily-learning-plan")
 def update_daily_learning_plan(payload: LearningCheckinRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     study_date = payload.study_date or date.today().isoformat()
     checkin = LearningCheckin(
         user_id=payload.user_id,
@@ -2816,13 +2827,11 @@ def update_daily_learning_plan(payload: LearningCheckinRequest, db: Session = De
     suggestion = build_daily_plan(db, payload.user_id, payload.course_id, study_date, payload.feedback)
     checkin.plan_id = suggestion.id
 
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        if payload.status == "completed":
-            course.progress = min(100, course.progress + 5)
-            course.mastery = min(100, course.mastery + 3)
-        elif payload.status == "stuck":
-            course.mastery = max(0, course.mastery - 3)
+    if payload.status == "completed":
+        course.progress = min(100, course.progress + 5)
+        course.mastery = min(100, course.mastery + 3)
+    elif payload.status == "stuck":
+        course.mastery = max(0, course.mastery - 3)
 
     db.commit()
     db.refresh(suggestion)
@@ -2839,6 +2848,7 @@ def update_daily_learning_plan(payload: LearningCheckinRequest, db: Session = De
 
 @app.get("/courses/{course_id}/knowledge-points")
 def list_course_knowledge_points(course_id: int, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id)
     points = db.scalars(select(KnowledgePoint).where(KnowledgePoint.course_id == course_id).order_by(KnowledgePoint.id)).all()
     return [
         {
@@ -2857,6 +2867,7 @@ def list_course_knowledge_points(course_id: int, db: Session = Depends(get_db)) 
 
 @app.get("/courses/{course_id}/learning-suggestions")
 def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id, user_id)
     suggestions = db.scalars(
         select(LearningSuggestion)
         .where(LearningSuggestion.course_id == course_id, LearningSuggestion.user_id == user_id)
@@ -2876,9 +2887,7 @@ def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Sessi
 
 @app.get("/courses/{course_id}/diagnosis")
 def get_course_diagnosis(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    course = require_course(db, course_id, user_id)
 
     documents_count = db.scalar(select(func.count()).select_from(Document).where(Document.course_id == course_id)) or 0
     mistakes_count = db.scalar(select(func.count()).select_from(MistakeRecord).where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)) or 0
@@ -3108,6 +3117,7 @@ def list_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | N
 
 @app.get("/qa/messages/search")
 def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id, user_id)
     term = keyword.strip()
     if not term:
         return []
@@ -3137,6 +3147,7 @@ def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db:
 
 @app.delete("/qa/messages")
 def delete_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, course_id, user_id)
     if session_id is None:
         result = db.execute(delete(ChatMessage).where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id))
     else:
@@ -3147,6 +3158,7 @@ def delete_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int |
 
 @app.post("/diagnosis/signals")
 def create_signal(payload: DiagnosisSignal, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, payload.course_id, payload.user_id)
     suggestion = LearningSuggestion(
         user_id=payload.user_id,
         course_id=payload.course_id,
@@ -3166,6 +3178,7 @@ def create_signal(payload: DiagnosisSignal, db: Session = Depends(get_db)) -> di
 
 @app.post("/mistakes")
 def create_mistake(payload: MistakeCreate, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, payload.course_id, payload.user_id)
     mistake = MistakeRecord(
         user_id=payload.user_id,
         course_id=payload.course_id,
@@ -3187,6 +3200,7 @@ def create_mistake(payload: MistakeCreate, db: Session = Depends(get_db)) -> dic
 def list_mistakes(user_id: int = 1, course_id: int | None = None, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     query = select(MistakeRecord).where(MistakeRecord.user_id == user_id)
     if course_id is not None:
+        require_course(db, course_id, user_id)
         query = query.where(MistakeRecord.course_id == course_id)
     mistakes = db.scalars(query.order_by(MistakeRecord.id.desc())).all()
     results: list[dict[str, object]] = []

@@ -113,6 +113,16 @@ type PlanFeedback = {
   feedback: string
 }
 
+function getErrorMessage(error: any, fallback: string) {
+  return error?.response?.data?.detail || error?.message || fallback
+}
+
+function localDateString() {
+  const now = new Date()
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 10)
+}
+
 const pdfParserOptions: Array<{ value: PdfParser; label: string; description: string; loadingMessage: string }> = [
   {
     value: 'pymupdf',
@@ -522,29 +532,36 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   async function loadDetail() {
     if (!course) return
-    try {
-      const [resourceResult, pointResult, suggestionResult, mistakeResult, diagnosisResult, profileResult, dailyResult, answerResult] = await Promise.all([
-        http.get(`/api/courses/${course.id}/resources`),
-        http.get(`/courses/${course.id}/knowledge-points`),
-        http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`),
-        http.get(`/mistakes?user_id=${userId}&course_id=${course.id}`),
-        http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`),
-        http.get(`/courses/${course.id}/profile?user_id=${userId}`),
-        http.post('/api/ai/daily-learning-plan', { user_id: userId, course_id: course.id }),
-        http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`),
-      ])
-      setResources(resourceResult as unknown as Resource[])
-      setKnowledge(pointResult as unknown as KnowledgePoint[])
-      const suggestionItems = suggestionResult as unknown as Suggestion[]
-      setSuggestions(suggestionItems)
-      setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
-      setMistakes(mistakeResult as unknown as Mistake[])
-      setDiagnosis(diagnosisResult as unknown as Diagnosis)
-      setProfile(profileResult as unknown as Profile)
-      setDailyPlan((dailyResult as unknown as { plan: string }).plan)
-      setQuizAnswerRecords(answerResult as unknown as QuizAnswerRecord[])
-    } catch (error: any) {
-      setNotice(error?.response?.data?.detail || '课程数据加载失败，请刷新课程列表后重试。')
+    const failures: string[] = []
+    const loadSection = async (label: string, request: () => Promise<unknown>, apply: (data: unknown) => void) => {
+      try {
+        apply(await request())
+      } catch (error: any) {
+        failures.push(`${label}：${getErrorMessage(error, '加载失败')}`)
+      }
+    }
+
+    await Promise.all([
+      loadSection('资料', () => http.get(`/api/courses/${course.id}/resources`), (data) => setResources(data as Resource[])),
+      loadSection('知识点', () => http.get(`/courses/${course.id}/knowledge-points`), (data) => setKnowledge(data as KnowledgePoint[])),
+      loadSection('学习计划', () => http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`), (data) => {
+        const suggestionItems = data as Suggestion[]
+        const todayTitle = `每日学习计划 ${localDateString()}`
+        const todayPlan = suggestionItems.find((item) => item.title === todayTitle) || suggestionItems.find((item) => item.title.startsWith('每日学习计划'))
+        setSuggestions(suggestionItems)
+        setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
+        setDailyPlan(todayPlan?.content || '')
+      }),
+      loadSection('错题库', () => http.get(`/mistakes?user_id=${userId}&course_id=${course.id}`), (data) => setMistakes(data as Mistake[])),
+      loadSection('学习诊断', () => http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`), (data) => setDiagnosis(data as Diagnosis)),
+      loadSection('学习画像', () => http.get(`/courses/${course.id}/profile?user_id=${userId}`), (data) => setProfile(data as Profile)),
+      loadSection('测验记录', () => http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`), (data) => setQuizAnswerRecords(data as QuizAnswerRecord[])),
+    ])
+
+    if (failures.length) {
+      setNotice(`部分模块加载失败：${failures.slice(0, 3).join('；')}`)
+    } else {
+      setNotice((current) => current.startsWith('部分模块加载失败') || current.startsWith('课程数据加载失败') ? '' : current)
     }
   }
 
@@ -574,6 +591,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       const result = (await http.post('/api/ai/extract-knowledge-points', { user_id: userId, course_id: activeCourse.id, force })) as unknown as { message?: string; reused?: boolean }
       setNotice(result.message || (result.reused ? '已显示已有知识点。' : '已根据课程资料生成知识点。'))
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '知识点生成失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -593,7 +612,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       }
       return result
     } catch (error: any) {
-      setNotice(error?.code === 'ECONNABORTED' ? 'AI 生成时间较长，请稍后重试。' : error?.response?.data?.detail || '整体计划修改失败，请稍后再试。')
+      setNotice(error?.code === 'ECONNABORTED' ? 'AI 生成时间较长，请稍后重试。' : getErrorMessage(error, '整体计划修改失败，请稍后再试。'))
       return null
     } finally {
       setLoading(false)
@@ -611,6 +630,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       setDailyPlan(result.plan)
       setNotice('已根据你的反馈更新今日学习计划。')
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '今日学习计划更新失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -623,6 +644,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       setQuizRaw(result.raw)
       setQuizQuestions(result.questions || [])
       setNotice('测验题已生成。')
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '测验生成失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -643,6 +666,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       setManualMistake('')
       setNotice('错题已保存。')
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '错题保存失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -654,6 +679,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       await http.delete(`/mistakes/${mistakeId}?user_id=${userId}`)
       setNotice('错题已删除。')
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '错题删除失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -1128,6 +1155,8 @@ function QuizPanel({
       })) as unknown as { analysis: string; answer_record_id: number }
       setEvaluations((items) => ({ ...items, [question.id]: result.analysis }))
       await onAnswered()
+    } catch (error: any) {
+      setEvaluations((items) => ({ ...items, [question.id]: getErrorMessage(error, 'AI 判断失败，请稍后再试。') }))
     } finally {
       setBusyQuestionId(null)
     }
@@ -1154,6 +1183,8 @@ function QuizPanel({
       })
       setSavedMistakes((items) => ({ ...items, [question.id]: true }))
       await onMistakeSaved()
+    } catch (error: any) {
+      setEvaluations((items) => ({ ...items, [question.id]: getErrorMessage(error, '加入错题库失败。') }))
     } finally {
       setBusyQuestionId(null)
     }
