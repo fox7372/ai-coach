@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    chroma_persist_dir: str = "backend/chroma_db"
+    chroma_collection: str = "course_document_chunks"
+    embedding_model: str = "BAAI/bge-base-zh-v1.5"
+    reranker_model: str = "BAAI/bge-reranker-base"
+    rag_device: str = "auto"
     env_file_path: str = ".env"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8-sig", extra="ignore")

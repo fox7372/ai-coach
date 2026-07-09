@@ -1,0 +1,8 @@
+-r requirements.txt
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+
+# PaddleX currently requires numpy < 2.4; PyTorch wheels may otherwise upgrade it.
+numpy<2.4,>=1.24
