@@ -951,8 +951,12 @@ def save_document_chunks(
             section_title = f"第 {page_number} 页片段"
         elif source_type == "presentation":
             section_title = f"Docling 演示文稿片段 {chunk_index + 1}"
-        else:
+        elif parser_name == "pymupdf":
+            section_title = f"PyMuPDF 片段 {chunk_index + 1}"
+        elif parser_name == "docling":
             section_title = f"Docling 结构化片段 {chunk_index + 1}"
+        else:
+            section_title = f"资料片段 {chunk_index + 1}"
         metadata = {
             "resource_title": document.filename,
             "source_type": source_type,
@@ -995,13 +999,13 @@ def process_pdf_document(db: Session, document: Document, parser: str = "pymupdf
         parser_name = parser if parser in {"docling", "pymupdf"} else "pymupdf"
         if parser_name == "pymupdf":
             pages = extract_pdf_pages(path)
-            structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+            structured_text = "\n\n".join(str(page["text"]) for page in pages)
         else:
             try:
                 structured_text = extract_pdf_with_docling(path)
             except Exception:
                 pages = extract_pdf_pages(path)
-                structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+                structured_text = "\n\n".join(str(page["text"]) for page in pages)
                 parser_name = "pymupdf"
             else:
                 try:
