@@ -1401,6 +1401,10 @@ def ensure_resource_schema() -> None:
 
 
 def ensure_default_chat_session(db: Session, user_id: int, course_id: int) -> ChatSession:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id, CourseModel.user_id == user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或不属于当前用户")
+
     session = db.scalar(
         select(ChatSession)
         .where(ChatSession.user_id == user_id, ChatSession.course_id == course_id)
@@ -2951,6 +2955,10 @@ def get_course_profile(course_id: int, user_id: int = 1, db: Session = Depends(g
 
 @app.post("/qa/ask", response_model=AskResponse)
 def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskResponse:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或不属于当前用户")
+
     session = db.scalar(
         select(ChatSession).where(
             ChatSession.id == payload.session_id,
@@ -3047,6 +3055,10 @@ def list_chat_sessions(user_id: int = 1, course_id: int = 1, db: Session = Depen
 
 @app.post("/qa/sessions", response_model=ChatSessionOut)
 def create_chat_session(payload: ChatSessionCreate, db: Session = Depends(get_db)) -> ChatSessionOut:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或不属于当前用户")
+
     title = (payload.title or "新对话").strip() or "新对话"
     session = ChatSession(user_id=payload.user_id, course_id=payload.course_id, title=title[:120])
     db.add(session)

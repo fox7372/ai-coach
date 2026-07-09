@@ -522,26 +522,30 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   async function loadDetail() {
     if (!course) return
-    const [resourceResult, pointResult, suggestionResult, mistakeResult, diagnosisResult, profileResult, dailyResult, answerResult] = await Promise.all([
-      http.get(`/api/courses/${course.id}/resources`),
-      http.get(`/courses/${course.id}/knowledge-points`),
-      http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`),
-      http.get(`/mistakes?user_id=${userId}&course_id=${course.id}`),
-      http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`),
-      http.get(`/courses/${course.id}/profile?user_id=${userId}`),
-      http.post('/api/ai/daily-learning-plan', { user_id: userId, course_id: course.id }),
-      http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`),
-    ])
-    setResources(resourceResult as unknown as Resource[])
-    setKnowledge(pointResult as unknown as KnowledgePoint[])
-    const suggestionItems = suggestionResult as unknown as Suggestion[]
-    setSuggestions(suggestionItems)
-    setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
-    setMistakes(mistakeResult as unknown as Mistake[])
-    setDiagnosis(diagnosisResult as unknown as Diagnosis)
-    setProfile(profileResult as unknown as Profile)
-    setDailyPlan((dailyResult as unknown as { plan: string }).plan)
-    setQuizAnswerRecords(answerResult as unknown as QuizAnswerRecord[])
+    try {
+      const [resourceResult, pointResult, suggestionResult, mistakeResult, diagnosisResult, profileResult, dailyResult, answerResult] = await Promise.all([
+        http.get(`/api/courses/${course.id}/resources`),
+        http.get(`/courses/${course.id}/knowledge-points`),
+        http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`),
+        http.get(`/mistakes?user_id=${userId}&course_id=${course.id}`),
+        http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`),
+        http.get(`/courses/${course.id}/profile?user_id=${userId}`),
+        http.post('/api/ai/daily-learning-plan', { user_id: userId, course_id: course.id }),
+        http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`),
+      ])
+      setResources(resourceResult as unknown as Resource[])
+      setKnowledge(pointResult as unknown as KnowledgePoint[])
+      const suggestionItems = suggestionResult as unknown as Suggestion[]
+      setSuggestions(suggestionItems)
+      setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
+      setMistakes(mistakeResult as unknown as Mistake[])
+      setDiagnosis(diagnosisResult as unknown as Diagnosis)
+      setProfile(profileResult as unknown as Profile)
+      setDailyPlan((dailyResult as unknown as { plan: string }).plan)
+      setQuizAnswerRecords(answerResult as unknown as QuizAnswerRecord[])
+    } catch (error: any) {
+      setNotice(error?.response?.data?.detail || '课程数据加载失败，请刷新课程列表后重试。')
+    }
   }
 
   useEffect(() => {
