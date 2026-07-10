@@ -6,7 +6,7 @@ import re
 import socket
 import time
 from hashlib import sha256
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -2385,6 +2385,45 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         "raw": result,
     }
 
+QUIZ_SECTION_PATTERN = re.compile(
+    r"(?m)(?=^\s*#{1,6}\s*(?:第\s*\d+\s*题?|题目\s*\d+|\d+\s*[.、]))"
+)
+QUIZ_QUESTION_PATTERN = re.compile(r"(?im)^\s*(?:Q|题目|问题)\s*[：:]\s*")
+QUIZ_FIELD_PATTERN = re.compile(r"(?im)^\s*(Q|题目|问题|A|答案|参考答案|E|解析|说明|讲解|检测点)\s*[：:]\s*")
+
+
+def parse_quiz_questions(result: str) -> list[tuple[str, str, str]]:
+    """Extract quiz fields without depending on blank lines from the model response."""
+    text_value = repair_mojibake(result).replace("\r\n", "\n")
+    blocks = [block.strip() for block in QUIZ_SECTION_PATTERN.split(text_value) if block.strip()]
+    if sum(bool(QUIZ_QUESTION_PATTERN.search(block)) for block in blocks) <= 1:
+        blocks = [block.strip() for block in QUIZ_QUESTION_PATTERN.split(text_value) if block.strip()]
+        blocks = [f"Q: {block}" for block in blocks]
+
+    parsed: list[tuple[str, str, str]] = []
+    for block in blocks:
+        matches = list(QUIZ_FIELD_PATTERN.finditer(block))
+        if not matches:
+            continue
+
+        fields: dict[str, str] = {}
+        for index, match in enumerate(matches):
+            field_name = match.group(1)
+            value_end = matches[index + 1].start() if index + 1 < len(matches) else len(block)
+            value = block[match.end() : value_end].strip()
+            if field_name in {"Q", "题目", "问题"}:
+                fields["question"] = value
+            elif field_name in {"A", "答案", "参考答案"}:
+                fields["answer"] = value
+            elif field_name in {"E", "解析", "说明", "讲解"}:
+                fields["explanation"] = value
+
+        question_text = fields.get("question", "")
+        if question_text:
+            parsed.append((question_text, fields.get("answer", ""), fields.get("explanation", "")))
+    return parsed
+
+
 @app.post("/api/ai/generate-quiz")
 def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     course = require_course(db, payload.course_id, payload.user_id)
@@ -2419,12 +2458,7 @@ def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -
         ),
     )
     questions: list[Question] = []
-    blocks = [block.strip() for block in result.split("\n\n") if block.strip()]
-    for block in blocks:
-        lines = [line.strip() for line in block.splitlines() if line.strip()]
-        question_text = next((line[2:].strip() for line in lines if line.startswith("Q:")), "")
-        answer_text = next((line[2:].strip() for line in lines if line.startswith("A:")), "")
-        explanation = next((line[2:].strip() for line in lines if line.startswith("E:")), "")
+    for question_text, answer_text, explanation in parse_quiz_questions(result):
         if question_text:
             question = Question(
                 course_id=payload.course_id,
@@ -2444,13 +2478,13 @@ def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -
         "questions": [
             {
                 "id": question.id,
-                "content": question.content,
-                "correct_answer": question.correct_answer,
-                "explanation": question.explanation,
+                "content": repair_mojibake(question.content or ""),
+                "correct_answer": repair_mojibake(question.correct_answer or ""),
+                "explanation": repair_mojibake(question.explanation or ""),
             }
             for question in questions
         ],
-        "raw": result,
+        "raw": repair_mojibake(result),
     }
 
 
@@ -2741,13 +2775,13 @@ def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db:
             "id": answer.id,
             "course_id": answer.course_id,
             "question_id": answer.question_id,
-            "question": question.content,
-            "student_answer": answer.student_answer,
+            "question": repair_mojibake(question.content or ""),
+            "student_answer": repair_mojibake(answer.student_answer or ""),
             "is_correct": answer.is_correct,
             "score": answer.score,
-            "ai_feedback": answer.ai_feedback,
-            "correct_answer": question.correct_answer,
-            "explanation": question.explanation,
+            "ai_feedback": repair_mojibake(answer.ai_feedback or ""),
+            "correct_answer": repair_mojibake(question.correct_answer or ""),
+            "explanation": repair_mojibake(question.explanation or ""),
             "answered_at": answer.answered_at,
         }
         for answer, question in rows
@@ -3121,6 +3155,7 @@ def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskRespo
     answer_with_references = answer + "\n\n### 核对位置\n" + "\n".join(f"- {item}" for item in references)
     assistant_message = ChatMessage(user_id=payload.user_id, course_id=payload.course_id, session_id=session.id, role="assistant", content=answer_with_references)
     db.add(assistant_message)
+    session.updated_at = datetime.now()
     db.flush()
     db.commit()
 
@@ -3140,7 +3175,7 @@ def list_chat_sessions(user_id: int = 1, course_id: int = 1, db: Session = Depen
     sessions = db.scalars(
         select(ChatSession)
         .where(ChatSession.user_id == user_id, ChatSession.course_id == course_id)
-        .order_by(ChatSession.id.desc())
+        .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
     ).all()
     return [
         ChatSessionOut(
@@ -3194,13 +3229,13 @@ def list_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | N
     messages = db.scalars(
         select(ChatMessage)
         .where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id, ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
     ).all()
     return [
         ChatMessageOut(
             id=message.id,
             role=message.role,
-            content=message.content,
+            content=repair_mojibake(message.content or ""),
             created_at=message.created_at.isoformat() if message.created_at else "",
         )
         for message in messages
@@ -3228,7 +3263,7 @@ def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db:
         {
             "id": message.id,
             "role": message.role,
-            "content": message.content,
+            "content": repair_mojibake(message.content or ""),
             "created_at": message.created_at.isoformat() if message.created_at else "",
             "session_id": session.id,
             "session_title": session.title,

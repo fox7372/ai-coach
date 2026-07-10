@@ -117,6 +117,21 @@ function getErrorMessage(error: any, fallback: string) {
   return error?.response?.data?.detail || error?.message || fallback
 }
 
+function repairMojibake(value: string | null | undefined) {
+  const text = value || ''
+  const markers = /(?:Ã|Â|â|ï¼|å|ç|è)/g
+  if (!markers.test(text) || [...text].some((char) => char.charCodeAt(0) > 255)) return text
+
+  try {
+    const decode = new TextDecoder('utf-8', { fatal: true })
+    const repaired = decode.decode(Uint8Array.from(text, (char) => char.charCodeAt(0)))
+    const score = (content: string) => (content.match(/(?:Ã|Â|â|ï¼|å|ç|è)/g) || []).length
+    return score(repaired) < score(text) ? repaired : text
+  } catch {
+    return text
+  }
+}
+
 function localDateString() {
   const now = new Date()
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
@@ -1291,17 +1306,21 @@ function QuizPanel({
       </div>
       {!questions.length && (
         <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
-          <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
+          <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${repairMojibake(raw)}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
         </div>
       )}
       {!!questions.length && (
         <div className="mt-4 grid gap-4">
-          {questions.map((question, index) => (
+          {questions.map((question, index) => {
+            const questionContent = repairMojibake(question.content)
+            const correctAnswer = repairMojibake(question.correct_answer) || '暂无参考答案'
+            const explanation = repairMojibake(question.explanation) || '暂无解析'
+            return (
             <div key={question.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-emerald-700">第 {index + 1} 题</p>
-                  <p className="mt-2 whitespace-pre-wrap font-medium text-slate-900">{question.content}</p>
+                  <p className="mt-2 whitespace-pre-wrap font-medium text-slate-900">{questionContent}</p>
                 </div>
                 <button onClick={() => void addToMistakeBook(question)} disabled={busyQuestionId === question.id || savedMistakes[question.id]} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400">
                   {savedMistakes[question.id] ? '已加入错题本' : '加入错题本'}
@@ -1310,7 +1329,7 @@ function QuizPanel({
 
               {mode === 'answer' ? (
                 <div className="markdown-answer mt-4 rounded-lg bg-white p-4">
-                  <ReactMarkdown>{`**参考答案**\n\n${question.correct_answer || '暂无参考答案'}\n\n**解析**\n\n${question.explanation || '暂无解析'}`}</ReactMarkdown>
+                  <ReactMarkdown>{`**参考答案**\n\n${correctAnswer}\n\n**解析**\n\n${explanation}`}</ReactMarkdown>
                 </div>
               ) : (
                 <div className="mt-4">
@@ -1332,14 +1351,21 @@ function QuizPanel({
                   </div>
                   {evaluations[question.id] && (
                     <div className="markdown-answer mt-3 rounded-lg bg-white p-4">
-                      <ReactMarkdown>{evaluations[question.id]}</ReactMarkdown>
+                      <ReactMarkdown>{repairMojibake(evaluations[question.id])}</ReactMarkdown>
                     </div>
                   )}
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
+      )}
+      {!!raw && !!questions.length && (
+        <details open className="markdown-answer mt-4 rounded-lg border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer font-medium text-slate-800">完整生成内容</summary>
+          <div className="mt-3 whitespace-pre-wrap break-words"><ReactMarkdown>{repairMojibake(raw)}</ReactMarkdown></div>
+        </details>
       )}
       <div className="mt-6 border-t border-slate-200 pt-5">
         <h4 className="font-semibold text-slate-900">已保存的作答记录</h4>
@@ -1348,14 +1374,14 @@ function QuizPanel({
             <div key={record.id} className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-slate-900">{record.question}</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">我的答案：{record.student_answer || '未填写'}</p>
+                  <p className="font-medium text-slate-900">{repairMojibake(record.question)}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">我的答案：{repairMojibake(record.student_answer) || '未填写'}</p>
                 </div>
                 <span className={`rounded-lg px-2 py-1 text-xs font-medium ${record.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>得分 {record.score}</span>
               </div>
               {record.ai_feedback && (
                 <div className="markdown-answer mt-3 rounded-lg bg-slate-50 p-3">
-                  <ReactMarkdown>{record.ai_feedback}</ReactMarkdown>
+                  <ReactMarkdown>{repairMojibake(record.ai_feedback)}</ReactMarkdown>
                 </div>
               )}
               <p className="mt-2 text-xs text-slate-400">{record.answered_at ? new Date(record.answered_at).toLocaleString() : '暂无时间'}</p>
@@ -2161,14 +2187,14 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
     if (!course || !question.trim()) return
     const current = question.trim()
     setQuestion('')
-    setMessages((items) => [...items, { id: `u-${Date.now()}`, role: 'user', content: current }])
+    setMessages((items) => [{ id: `u-${Date.now()}`, role: 'user', content: current }, ...items])
     setLoading(true)
     try {
       const result = (await http.post('/qa/ask', { question: current, course_id: course.id, user_id: userId, session_id: activeSessionId })) as unknown as { answer: string; assistant_message_id: number }
-      setMessages((items) => [...items, { id: result.assistant_message_id, role: 'assistant', content: result.answer }])
+      setMessages((items) => [{ id: result.assistant_message_id, role: 'assistant', content: result.answer }, ...items])
       await loadSessions(activeSessionId || undefined)
     } catch (error: any) {
-      setMessages((items) => [...items, { id: `e-${Date.now()}`, role: 'assistant', content: error?.response?.data?.detail || '问答失败' }])
+      setMessages((items) => [{ id: `e-${Date.now()}`, role: 'assistant', content: error?.response?.data?.detail || '问答失败' }, ...items])
     } finally {
       setLoading(false)
     }
@@ -2233,7 +2259,7 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
             {searchResults.map((item) => (
               <button key={`${item.session_id}-${item.id}`} onClick={() => void loadMessages(item.session_id)} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-left hover:border-emerald-300">
                 <p className="text-xs font-semibold text-emerald-700">{item.session_title}</p>
-                <p className="mt-1 line-clamp-3 text-sm text-slate-600">{item.content}</p>
+                <p className="mt-1 line-clamp-3 text-sm text-slate-600">{repairMojibake(item.content)}</p>
               </button>
             ))}
             {!searchResults.length && <p className="text-sm text-slate-500">没有匹配的历史记录。</p>}
@@ -2260,16 +2286,18 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
         <h3 className="font-semibold">AI 问答</h3>
         <p className="mt-1 text-sm text-slate-500">当前课程：{course.name}</p>
         {mistakeMessage && <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{mistakeMessage}</p>}
-        <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
+        <div className="mt-4 grid gap-3">
           {historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">正在加载历史...</div>}
-          {messages.map((message, index) => (
+          {messages.map((message, index) => {
+            const pairedQuestion = messages.slice(index + 1).find((item) => item.role === 'user')?.content
+            return (
             <div key={message.id} className={`rounded-lg p-4 ${message.role === 'user' ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50'}`}>
-              <ReactMarkdown>{message.content}</ReactMarkdown>
+              <ReactMarkdown>{repairMojibake(message.content)}</ReactMarkdown>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 {message.created_at && <p className="text-xs text-slate-400">{new Date(message.created_at).toLocaleString()}</p>}
                 {message.role === 'assistant' && (
                   <button
-                    onClick={() => void saveAnswerAsMistake(message, messages[index - 1]?.role === 'user' ? messages[index - 1].content : '')}
+                    onClick={() => void saveAnswerAsMistake(message, pairedQuestion)}
                     disabled={savingMistakeId === message.id}
                     className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400"
                   >
@@ -2279,7 +2307,8 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
                 )}
               </div>
             </div>
-          ))}
+            )
+          })}
           {!messages.length && !historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">选择一个历史对话，或新建对话后开始提问。</div>}
           {loading && <LoadingNotice text="AI 正在检索课程资料并生成回答..." />}
         </div>
