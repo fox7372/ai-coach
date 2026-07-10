@@ -9,6 +9,7 @@ __pycache__/
 backend/.env
 backend/.mysql-data/
 backend/.mysql-data-backup-*/
+backend/.mysql-data-corrupt-*/
 backend/uploads/
 backend/chroma_db/
 backend/.test_chroma/
@@ -29,6 +30,11 @@ npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
 ~$*
+
+# Local planning documents
+启动.doc
+总体描述.docx
+技术栈.docx
 
 # Editor and OS files
 .vscode/*
