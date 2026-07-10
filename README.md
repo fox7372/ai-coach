@@ -126,43 +126,7 @@ cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
 
 ## 配置环境变量
 
-复制示例配置：
-
-```powershell
-cd backend
-Copy-Item .env.example .env
-```
-
-至少配置数据库和对话模型：
-
-```env
-DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/ai_learning?charset=utf8mb4
-AI_PROVIDER=deepseek
-AI_API_KEY=your_api_key
-AI_BASE_URL=https://api.deepseek.com
-AI_MODEL=deepseek-chat
-
-CHROMA_PERSIST_DIR=backend/chroma_db
-EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-RERANKER_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
-RAG_DEVICE=auto
-```
-
-其他 OpenAI 兼容服务示例：
-
-```env
-# OpenAI
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=gpt-4o-mini
-
-# 通义千问兼容接口
-AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-AI_MODEL=qwen-plus
-
-# 硅基流动兼容接口
-AI_BASE_URL=https://api.siliconflow.cn/v1
-AI_MODEL=deepseek-ai/DeepSeek-V3
-```
+直接登陆网站设置里面配置模型（提供方的接口格式和 OpenAI API 一样）
 
 ## 本地启动
 
