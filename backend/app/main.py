@@ -4,6 +4,7 @@ import json
 import math
 import re
 import socket
+import time
 from hashlib import sha256
 from datetime import date
 from pathlib import Path
@@ -1101,6 +1102,48 @@ def process_presentation_document(db: Session, document: Document) -> None:
         db.commit()
 
 
+def extract_docx_text(path: Path) -> str:
+    try:
+        from docx import Document as WordDocument
+    except ImportError as exc:
+        raise RuntimeError("后端缺少 python-docx，请先安装 requirements.txt") from exc
+
+    word_document = WordDocument(path)
+    parts = [paragraph.text.strip() for paragraph in word_document.paragraphs if paragraph.text.strip()]
+    for table in word_document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    text_value = "\n\n".join(parts).strip()
+    if not text_value:
+        raise RuntimeError("Word 文档没有提取到可用文本。")
+    return text_value
+
+
+def process_word_document(db: Session, document: Document) -> None:
+    document.status = "processing"
+    document.parse_status = "processing"
+    document.progress_stage = "python_docx_extract"
+    document.error_message = None
+    db.commit()
+
+    try:
+        structured_text = extract_docx_text(Path(document.storage_path))
+        chunk_count = save_document_chunks(db, document, structured_text, "python-docx", "word")
+        document.raw_content = structured_text
+        document.status = "ready"
+        document.parse_status = "ready"
+        document.progress_stage = f"completed:{chunk_count} chunks:python-docx"
+        db.commit()
+    except Exception as exc:
+        document.status = "failed"
+        document.parse_status = "failed"
+        document.progress_stage = "failed"
+        document.error_message = clean_error_message(exc)
+        db.commit()
+
+
 def choose_subtitle_track(info: dict[str, object], preferred_language: str) -> tuple[str | None, str | None, str | None]:
     language_candidates = [preferred_language, "zh-CN", "zh-Hans", "zh", "en"]
     for subtitle_type, key in (("manual", "subtitles"), ("automatic", "automatic_captions")):
@@ -1690,6 +1733,62 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     }
 
 
+async def save_uploaded_document(
+    db: Session,
+    course_id: int,
+    parser: Literal["pymupdf", "docling"],
+    file: UploadFile,
+) -> tuple[Document, int, float]:
+    suffix = Path(file.filename or "document.pdf").suffix.lower() or ".pdf"
+    filename = Path(file.filename or "document.pdf").name
+    file_type = suffix.lstrip(".")
+    if file_type not in {"pdf", "ppt", "pptx", "docx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持 PDF、PPT、PPTX、DOCX 资料上传")
+    exists = db.scalar(select(Document).where(Document.course_id == course_id, Document.filename == filename))
+    if exists is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"该课程已经上传过同名文件：{filename}")
+
+    target = UPLOAD_DIR / f"{uuid4()}{suffix}"
+    with target.open("wb") as output:
+        while content := await file.read(1024 * 1024):
+            output.write(content)
+
+    document = Document(
+        course_id=course_id,
+        filename=filename,
+        file_type=file_type,
+        storage_path=str(target),
+        parse_status="processing",
+        source_type="word" if file_type == "docx" else None,
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+
+    processing_started = time.perf_counter()
+    if file_type == "pdf":
+        process_pdf_document(db, document, parser)
+    elif file_type in {"ppt", "pptx"}:
+        process_presentation_document(db, document)
+    else:
+        process_word_document(db, document)
+    db.refresh(document)
+    chunk_count = db.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document.id)) or 0
+    return document, int(chunk_count), round(time.perf_counter() - processing_started, 2)
+
+
+def uploaded_document_response(document: Document, chunk_count: int, processing_seconds: float) -> dict[str, object]:
+    return {
+        "document_id": str(document.id),
+        "filename": document.filename,
+        "status": document.parse_status,
+        "chunk_count": chunk_count,
+        "processing_seconds": processing_seconds,
+        "parser": document.progress_stage,
+        "message": "资料已解析并写入 RAG 切块。" if chunk_count else document.error_message or "文件已保存，但没有生成 RAG 切块。",
+    }
+
+
 @app.post("/documents/upload")
 async def upload_document(
     course_id: int = 1,
@@ -1698,51 +1797,41 @@ async def upload_document(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     require_course(db, course_id)
-    suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
-    filename = file.filename or "document.pdf"
-    file_type = suffix.lstrip(".").lower()
-    if file_type not in {"pdf", "ppt", "pptx"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持 PDF、PPT、PPTX 资料上传")
-    exists = db.scalar(select(Document).where(Document.course_id == course_id, Document.filename == filename))
-    if exists is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该课程已经上传过同名文件，请不要重复上传")
+    document, chunk_count, processing_seconds = await save_uploaded_document(db, course_id, parser, file)
+    return uploaded_document_response(document, chunk_count, processing_seconds)
 
-    document_id = str(uuid4())
-    target = UPLOAD_DIR / f"{document_id}{suffix}"
-    target.write_bytes(await file.read())
 
-    document = Document(
-        course_id=course_id,
-        filename=filename,
-        file_type=file_type,
-        storage_path=str(target),
-        parse_status="processing",
-    )
-    db.add(document)
-    db.commit()
-    db.refresh(document)
+@app.post("/documents/upload/batch")
+async def upload_documents_batch(
+    course_id: int = 1,
+    parser: Literal["pymupdf", "docling"] = "pymupdf",
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_course(db, course_id)
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请至少选择一份资料")
+    if len(files) > 20:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="单次最多导入 20 份资料")
 
-    if document.file_type.lower() == "pdf":
-        process_pdf_document(db, document, parser)
-        db.refresh(document)
-    elif document.file_type.lower() in {"ppt", "pptx"}:
-        process_presentation_document(db, document)
-        db.refresh(document)
-    else:
-        document.status = "uploaded"
-        document.parse_status = "uploaded"
-        document.progress_stage = "saved_without_parser"
-        db.commit()
-        db.refresh(document)
+    results: list[dict[str, object]] = []
+    for file in files:
+        filename = Path(file.filename or "未命名文件").name
+        try:
+            document, chunk_count, processing_seconds = await save_uploaded_document(db, course_id, parser, file)
+            results.append({"success": document.parse_status == "ready", "resource": document_to_resource(db, document), **uploaded_document_response(document, chunk_count, processing_seconds)})
+        except HTTPException as exc:
+            results.append({"success": False, "filename": filename, "error": str(exc.detail)})
+        except Exception as exc:
+            results.append({"success": False, "filename": filename, "error": clean_error_message(exc)})
 
-    chunk_count = db.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document.id)) or 0
+    success_count = sum(1 for item in results if item["success"])
     return {
-        "document_id": str(document.id),
-        "filename": document.filename,
-        "status": document.parse_status,
-        "chunk_count": int(chunk_count),
-        "parser": document.progress_stage,
-        "message": "资料已解析并写入 RAG 切块。" if chunk_count else document.error_message or "文件已保存，但没有生成 RAG 切块。",
+        "course_id": course_id,
+        "success_count": success_count,
+        "failed_count": len(results) - success_count,
+        "results": results,
+        "message": f"批量导入完成：成功 {success_count} 份，失败 {len(results) - success_count} 份。",
     }
 
 
@@ -2084,10 +2173,12 @@ def retry_resource(resource_id: int, db: Session = Depends(get_db)) -> ResourceO
         process_pdf_document(db, document)
     elif document.file_type in {"ppt", "pptx"}:
         process_presentation_document(db, document)
+    elif document.file_type == "docx":
+        process_word_document(db, document)
     elif document.source_type == "video":
         process_video_document(db, document, document.language or "zh", False)
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF、PPT/PPTX 或视频资料")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF、PPT/PPTX、DOCX 或视频资料")
     db.refresh(document)
     return document_to_resource(db, document)
 

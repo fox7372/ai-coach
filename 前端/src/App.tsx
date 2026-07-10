@@ -143,8 +143,16 @@ const pdfParserDetails = Object.fromEntries(pdfParserOptions.map((option) => [op
 type ImportEstimate = {
   label: string
   detail: string
+  minSeconds: number
   maxSeconds: number
 }
+
+type ImportTiming = {
+  samples: number
+  secondsPerMb: number
+}
+
+const importTimingStorageKey = 'ai-learning-import-timings-v1'
 
 function formatDuration(seconds: number) {
   if (seconds < 60) return `约 ${Math.max(10, Math.round(seconds / 10) * 10)} 秒`
@@ -162,6 +170,45 @@ function formatDurationRange(minSeconds: number, maxSeconds: number) {
   return `约 ${minText} - ${maxText}`
 }
 
+function importTimingKey(file: File, parser: PdfParser) {
+  const suffix = file.name.split('.').pop()?.toLowerCase() || ''
+  if (suffix === 'docx') return 'docx'
+  if (suffix === 'ppt' || suffix === 'pptx') return 'presentation-docling'
+  return parser === 'docling' ? 'pdf-docling' : 'pdf-pymupdf'
+}
+
+function readImportTimings(): Record<string, ImportTiming> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(importTimingStorageKey) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, ImportTiming> : {}
+  } catch {
+    return {}
+  }
+}
+
+function recordImportTimings(files: File[], results: Array<{ success: boolean; processing_seconds?: number }>, parser: PdfParser) {
+  const timings = readImportTimings()
+  files.forEach((file, index) => {
+    const result = results[index]
+    const elapsedSeconds = result?.processing_seconds
+    if (!result?.success || !elapsedSeconds || elapsedSeconds <= 0) return
+    const key = importTimingKey(file, parser)
+    const secondsPerMb = elapsedSeconds / Math.max(0.2, file.size / 1024 / 1024)
+    const previous = timings[key]
+    const samples = Math.min(8, (previous?.samples || 0) + 1)
+    const previousWeight = Math.max(0, samples - 1)
+    timings[key] = {
+      samples,
+      secondsPerMb: ((previous?.secondsPerMb || secondsPerMb) * previousWeight + secondsPerMb) / samples,
+    }
+  })
+  try {
+    window.localStorage.setItem(importTimingStorageKey, JSON.stringify(timings))
+  } catch {
+    // Estimation still works with the default profile when storage is unavailable.
+  }
+}
+
 function estimateImportTime(file: File, parser: PdfParser): ImportEstimate {
   const suffix = file.name.split('.').pop()?.toLowerCase() || ''
   const sizeMb = Math.max(0.2, file.size / 1024 / 1024)
@@ -171,16 +218,37 @@ function estimateImportTime(file: File, parser: PdfParser): ImportEstimate {
   const expectedSeconds = effectiveParser === 'pymupdf'
     ? 25 + sizeMb * 32
     : 75 + sizeMb * 70
-  const minSeconds = Math.max(20, expectedSeconds * 0.75)
-  const maxSeconds = Math.max(45, expectedSeconds * 1.45)
+  const timing = readImportTimings()[importTimingKey(file, parser)]
+  const calibratedSeconds = timing ? Math.max(8, timing.secondsPerMb * sizeMb) : expectedSeconds
+  const rangeRatio = timing ? (timing.samples >= 3 ? 0.2 : 0.35) : 0.45
+  const minSeconds = Math.max(8, calibratedSeconds * (1 - rangeRatio))
+  const maxSeconds = Math.max(20, calibratedSeconds * (1 + rangeRatio))
 
   return {
     label: formatDurationRange(minSeconds, maxSeconds),
     maxSeconds,
-    detail: effectiveParser === 'pymupdf'
-      ? 'PyMuPDF 提取通常很快，主要时间花在切块、生成向量和写入知识库。'
-      : 'Docling 会做结构化解析，再切块、生成向量并写入知识库，耗时波动更大。',
+    minSeconds,
+    detail: timing
+      ? `基于本机最近 ${timing.samples} 次同类资料的实际处理速度校准。`
+      : effectiveParser === 'pymupdf'
+        ? '首次导入使用本机 CPU 的保守基线；完成后会按实际耗时自动校准。'
+        : '首次导入使用 Docling 的保守基线；完成后会按实际耗时自动校准。',
   }
+}
+
+function estimateFilesImportTime(files: File[], parser: PdfParser): ImportEstimate | null {
+  if (!files.length) return null
+  const estimates = files.map((file) => estimateImportTime(file, parser))
+  const minSeconds = estimates.reduce((total, item) => total + item.minSeconds, 0)
+  const maxSeconds = estimates.reduce((total, item) => total + item.maxSeconds, 0)
+  const hasWord = files.some((file) => file.name.toLowerCase().endsWith('.docx'))
+  const hasPresentation = files.some((file) => /\.pptx?$/i.test(file.name))
+  const detail = hasPresentation
+    ? '批量任务会按顺序处理；PPT/PPTX 固定使用 Docling，Word 使用文本提取，PDF 按当前解析方式处理。'
+    : hasWord
+      ? '批量任务会按顺序处理；Word 使用文本提取，PDF 按当前解析方式处理。'
+      : estimates[0].detail
+  return { label: formatDurationRange(minSeconds, maxSeconds), minSeconds, maxSeconds, detail }
 }
 
 function statusClass(status: ImportStatus) {
@@ -1511,8 +1579,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [selectedCourseId, setSelectedCourseId] = useState<number | ''>(courses[0]?.id || '')
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
-  const [fileName, setFileName] = useState('')
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [pdfParser, setPdfParser] = useState<PdfParser>('pymupdf')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
@@ -1523,12 +1590,12 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
   const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const selectedFileEstimate = useMemo(() => selectedFile ? estimateImportTime(selectedFile, pdfParser) : null, [selectedFile, pdfParser])
+  const selectedFilesEstimate = useMemo(() => estimateFilesImportTime(selectedFiles, pdfParser), [selectedFiles, pdfParser])
 
   useEffect(() => {
-    if (!selectedFile || !selectedFileEstimate || status !== 'idle') return
-    setMessage(`文件已选择，预计处理 ${selectedFileEstimate.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
-  }, [selectedFile, selectedFileEstimate, status])
+    if (!selectedFiles.length || !selectedFilesEstimate || status !== 'idle') return
+    setMessage(`已选择 ${selectedFiles.length} 份资料，预计处理 ${selectedFilesEstimate.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
+  }, [selectedFiles, selectedFilesEstimate, status])
 
   useEffect(() => {
     if (courses.length && !courses.some((course) => course.id === Number(selectedCourseId))) {
@@ -1570,20 +1637,18 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
   }
 
-  function selectFile(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] || null
-    setSelectedFile(file)
-    setFileName(file?.name || '')
-    if (!file) return
-    const estimate = estimateImportTime(file, pdfParser)
+  function selectFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || [])
+    setSelectedFiles(files)
+    if (!files.length) return
+    const estimate = estimateFilesImportTime(files, pdfParser)
     setStatus('idle')
     setActiveImportKind(null)
-    setMessage(`文件已选择，预计处理 ${estimate.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
+    setMessage(`已选择 ${files.length} 份资料，预计处理 ${estimate?.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
   }
 
-  function cancelSelectedFile() {
-    setSelectedFile(null)
-    setFileName('')
+  function cancelSelectedFiles() {
+    setSelectedFiles([])
     setActiveImportKind(null)
     setStatus('idle')
     setMessage('已取消本次文件选择，文件没有上传，也不会写入知识库。')
@@ -1592,32 +1657,50 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
   }
 
-  async function uploadSelectedFile() {
-    const file = selectedFile
-    if (!file) return
-    setFileName(file.name)
+  async function uploadSelectedFiles() {
+    const files = selectedFiles
+    if (!files.length) return
     setStatus('loading')
-    const suffix = file.name.split('.').pop()?.toLowerCase() || ''
-    const isPresentation = suffix === 'ppt' || suffix === 'pptx'
-    const parser = isPresentation ? 'docling' : pdfParser
-    const estimate = estimateImportTime(file, pdfParser)
-    setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
-    setMessage(`${isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : pdfParserDetails[pdfParser].loadingMessage} 预计 ${estimate.label}。`)
-    const uploadTimeout = Math.max(parser === 'docling' ? 300000 : 180000, Math.ceil(estimate.maxSeconds * 1000 + 60000))
-    const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
+    const usesDocling = files.some((file) => /\.pptx?$/i.test(file.name) || (file.name.toLowerCase().endsWith('.pdf') && pdfParser === 'docling'))
+    const hasWord = files.some((file) => file.name.toLowerCase().endsWith('.docx'))
+    const estimate = estimateFilesImportTime(files, pdfParser)
+    setActiveImportKind(usesDocling ? 'docling' : 'normal')
+    const processingMessage = usesDocling
+      ? '正在批量解析资料，包含 Docling 结构化任务...'
+      : hasWord
+        ? '正在批量提取 Word 和 PDF 文本...'
+        : pdfParserDetails[pdfParser].loadingMessage
+    setMessage(`${processingMessage} 预计 ${estimate?.label}。`)
+    const uploadTimeout = Math.max(usesDocling ? 300000 : 180000, Math.ceil((estimate?.maxSeconds || 180) * 1000 + 60000))
+    const finalName = files.length === 1
+      ? files[0].name.replace(/\.[^.]+$/, '') || '未命名课程'
+      : `${files[0].name.replace(/\.[^.]+$/, '')} 等 ${files.length} 份资料`
     const formData = new FormData()
-    formData.append('file', file)
+    files.forEach((file) => formData.append('files', file))
     let createdCourse: Course | null = null
     let created = false
     try {
-      const result = await resolveCourseForResource(finalName, `由资料 ${file.name} 自动创建`)
+      const result = await resolveCourseForResource(finalName, `由 ${files.length} 份资料自动创建`)
       createdCourse = result.course
       created = result.created
-      const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: uploadTimeout }) as unknown as { chunk_count: number; message?: string }
+      const uploadResult = await http.post(`/documents/upload/batch?course_id=${createdCourse.id}&parser=${pdfParser}`, formData, { timeout: uploadTimeout }) as unknown as {
+        success_count: number
+        failed_count: number
+        results: Array<{ success: boolean; resource?: Resource; chunk_count?: number; processing_seconds?: number; error?: string }>
+      }
+      recordImportTimings(files, uploadResult.results, pdfParser)
+      const firstResource = uploadResult.results.find((item) => item.resource)?.resource || null
+      setLastResource(firstResource)
+      if (uploadResult.success_count === 0) {
+        await cleanupCourse(createdCourse, created)
+        setStatus('error')
+        setMessage(uploadResult.results.find((item) => item.error)?.error || '所有资料都导入失败，已清理本次新建课程。')
+        return
+      }
       setStatus('success')
       setActiveImportKind(null)
-      setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 已加入《${createdCourse.name}》，生成 ${uploadResult.chunk_count} 个知识片段。`)
-      setSelectedFile(null)
+      setMessage(`批量导入完成：已加入《${createdCourse.name}》，成功 ${uploadResult.success_count} 份，失败 ${uploadResult.failed_count} 份。`)
+      setSelectedFiles([])
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
@@ -1900,13 +1983,13 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
             <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><FileText /></div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-950">上传 PDF / PPT</h3>
-                <p className="text-sm text-slate-500">上传成功后才会生成或保留课程。PPT/PPTX 使用 Docling 解析。</p>
+                <h3 className="text-lg font-semibold text-slate-950">批量导入文件资料</h3>
+                <p className="text-sm text-slate-500">一次可选择多份资料并导入同一课程；上传成功后才会生成或保留课程。</p>
               </div>
             </div>
             <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <p className="font-semibold">PDF 只支持 PyMuPDF / Docling</p>
-              <p className="mt-1 text-xs leading-5 text-emerald-800">PyMuPDF 适合文本层 PDF；Docling 适合结构化解析。PPT/PPTX 固定使用 Docling。</p>
+              <p className="font-semibold">支持 PDF、PPT/PPTX、Word DOCX</p>
+              <p className="mt-1 text-xs leading-5 text-emerald-800">PyMuPDF 适合文本层 PDF；Docling 适合复杂 PDF 和演示文稿；Word DOCX 使用正文和表格文本提取。</p>
             </div>
             <label className="mt-4 block text-sm font-medium">
               PDF 解析方式
@@ -1923,26 +2006,32 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
             <p className="mt-2 text-xs leading-5 text-slate-500">{pdfParserDetails[pdfParser].description}</p>
             <label className={`primary-action mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${status === 'loading' ? 'cursor-not-allowed bg-slate-400' : 'cursor-pointer'}`}>
               <FileUp size={16} />
-              选择文件
-              <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={selectFile} disabled={status === 'loading'} />
+              选择资料
+              <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx,.docx" multiple className="hidden" onChange={selectFiles} disabled={status === 'loading'} />
             </label>
-            <p className="mt-2 text-sm text-slate-500">{fileName || '尚未选择文件，支持 PDF、PPT、PPTX'}</p>
-            {selectedFileEstimate && (
+            <p className="mt-2 text-sm text-slate-500">{selectedFiles.length ? `已选择 ${selectedFiles.length} 份资料` : '尚未选择资料，支持 PDF、PPT、PPTX、DOCX'}</p>
+            {selectedFiles.length > 0 && (
+              <div className="mt-2 text-xs leading-5 text-slate-500">
+                {selectedFiles.slice(0, 3).map((file) => <p key={`${file.name}-${file.lastModified}`}>{file.name}</p>)}
+                {selectedFiles.length > 3 && <p>另有 {selectedFiles.length - 3} 份资料。</p>}
+              </div>
+            )}
+            {selectedFilesEstimate && (
               <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
                 <div className="flex items-center gap-2 font-semibold">
                   <Clock size={16} />
-                  预计处理时间：{selectedFileEstimate.label}
+                  批量预计处理时间：{selectedFilesEstimate.label}
                 </div>
-                <p className="mt-1 text-xs leading-5 text-sky-800">{selectedFileEstimate.detail}</p>
+                <p className="mt-1 text-xs leading-5 text-sky-800">{selectedFilesEstimate.detail}</p>
               </div>
             )}
-            {selectedFile && (
+            {selectedFiles.length > 0 && (
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button onClick={() => void uploadSelectedFile()} disabled={status === 'loading'} className="primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
+                <button onClick={() => void uploadSelectedFiles()} disabled={status === 'loading'} className="primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
                   {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
-                  开始处理
+                  开始处理 {selectedFiles.length} 份
                 </button>
-                <button type="button" onClick={cancelSelectedFile} disabled={status === 'loading'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-red-200 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-400">
+                <button type="button" onClick={cancelSelectedFiles} disabled={status === 'loading'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-red-200 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-400">
                   <Trash2 size={16} />
                   取消上传
                 </button>
