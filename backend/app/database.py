@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "backend/chroma_db"
     chroma_collection: str = "course_document_chunks_bge_small_zh_v15"
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
-    reranker_model: str = "BAAI/bge-reranker-base"
+    reranker_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     rag_device: str = "auto"
     env_file_path: str = ".env"
 
