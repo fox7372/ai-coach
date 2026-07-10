@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.main import parse_quiz_questions  # noqa: E402
 from app.ai_service import normalize_math_delimiters  # noqa: E402
 from app.database import Base, engine  # noqa: E402
-from app.main import list_chat_messages  # noqa: E402
-from app.models import ChatMessage, ChatSession, CourseModel, User  # noqa: E402
+from app.main import get_course_diagnosis, get_course_profile, list_chat_messages  # noqa: E402
+from app.models import AnswerRecord, ChatMessage, ChatSession, CourseModel, LearningCheckin, MistakeRecord, Question, User  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 
@@ -79,3 +79,35 @@ def test_chat_messages_return_newest_answer_first():
         messages = list_chat_messages(user.id, course.id, session.id, db)
 
     assert [message.content for message in messages] == ["后答", "后问", "先答", "先问"]
+
+
+def test_diagnosis_and_profile_are_evidence_based():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    with Session(engine) as db:
+        user = User(username="diagnosis-user", password_hash="demo")
+        db.add(user)
+        db.flush()
+        course = CourseModel(user_id=user.id, name="诊断课程", progress=20, mastery=55)
+        db.add(course)
+        db.flush()
+        question = Question(course_id=course.id, content="测试题", correct_answer="答案")
+        db.add(question)
+        db.flush()
+        db.add_all(
+            [
+                AnswerRecord(user_id=user.id, course_id=course.id, question_id=question.id, student_answer="错误", is_correct=False, score=40),
+                LearningCheckin(user_id=user.id, course_id=course.id, study_date="2026-07-10", status="stuck", minutes=15),
+                LearningCheckin(user_id=user.id, course_id=course.id, study_date="2026-07-11", status="studying", minutes=20),
+                MistakeRecord(user_id=user.id, course_id=course.id, mistake_type="quiz_wrong", review_status="unreviewed"),
+            ]
+        )
+        db.commit()
+
+        diagnosis = get_course_diagnosis(course.id, user.id, db)
+        profile = get_course_profile(course.id, user.id, db)
+
+    assert diagnosis["confidence"]["level"] == "medium"
+    assert any(item["label"] == "测验表现" and item["value"] == 40 for item in diagnosis["items"])
+    assert any(action["title"] == "优先修复基础题" for action in diagnosis["actions"])
+    assert any(item["name"] == "练习表现" and item["value"] == 40 for item in profile["radar"])

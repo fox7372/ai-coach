@@ -82,8 +82,24 @@ type ImageMistakeUploadResult = {
   analysis?: string
   mistake_id?: number | null
 }
-type Diagnosis = { progress: number; mastery: number; items: Array<{ label: string; value: number; status: string }> }
-type Profile = { radar: Array<{ name: string; value: number }>; conclusion: string }
+type InsightTone = 'emerald' | 'amber' | 'red'
+type EvidenceConfidence = { level: 'low' | 'medium' | 'high'; label: string; detail: string }
+type LearningAction = { title: string; reason: string; action: string; tone: InsightTone }
+type Diagnosis = {
+  progress: number
+  mastery: number
+  items: Array<{ label: string; value: number | null; status: string; hint: string; tone: InsightTone }>
+  confidence: EvidenceConfidence
+  actions: LearningAction[]
+  strengths: string[]
+}
+type Profile = {
+  radar: Array<{ name: string; value: number | null; evidence: string }>
+  confidence: EvidenceConfidence
+  focuses: LearningAction[]
+  strengths: string[]
+  conclusion: string
+}
 type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string; created_at?: string }
 type ChatSession = { id: number; title: string; course_id: number; created_at: string; updated_at: string }
 type ChatSearchResult = ChatMessage & { session_id: number; session_title: string }
@@ -1567,17 +1583,51 @@ function MistakesPanel({
 function DiagnosisPanel({ diagnosis }: { diagnosis: Diagnosis | null }) {
   return (
     <Panel>
-      <h3 className="font-semibold">学习诊断</h3>
-      {!diagnosis ? <p className="mt-4 text-sm text-slate-500">诊断加载中。</p> : (
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {diagnosis.items.map((item) => (
-            <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center justify-between"><p>{item.label}</p><p className="font-semibold text-emerald-700">{item.value}%</p></div>
-              <div className="mt-3 h-2 rounded-full bg-white"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, item.value)}%` }} /></div>
-              <p className="mt-2 text-sm text-slate-500">{item.status}</p>
-            </div>
-          ))}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">学习诊断</h3>
+          <p className="mt-1 text-sm text-slate-500">基于作答、错题、学习反馈和课程问答给出当前优先级。</p>
         </div>
+        {diagnosis && <span className={`rounded-md px-2.5 py-1 text-xs font-semibold ${diagnosis.confidence.level === 'high' ? 'bg-emerald-50 text-emerald-700' : diagnosis.confidence.level === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{diagnosis.confidence.label}</span>}
+      </div>
+      {!diagnosis ? <p className="mt-4 text-sm text-slate-500">诊断加载中。</p> : (
+        <>
+          <p className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">{diagnosis.confidence.detail}</p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {diagnosis.items.map((item) => {
+              const value = item.value ?? 0
+              const barClass = item.tone === 'red' ? 'bg-red-500' : item.tone === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'
+              return (
+                <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3"><p className="font-medium">{item.label}</p><p className="font-semibold text-slate-900">{item.value === null ? '待采样' : `${item.value}%`}</p></div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><div className={`h-2 rounded-full ${barClass}`} style={{ width: `${value}%` }} /></div>
+                  <p className="mt-2 text-sm text-slate-600">{item.status}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">{item.hint}</p>
+                </div>
+              )
+            })}
+          </div>
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div>
+              <h4 className="font-semibold text-slate-900">当前优先动作</h4>
+              <div className="mt-3 grid gap-3">
+                {diagnosis.actions.map((item) => (
+                  <div key={item.title} className={`rounded-lg border p-4 ${item.tone === 'red' ? 'border-red-100 bg-red-50/70' : item.tone === 'amber' ? 'border-amber-100 bg-amber-50/70' : 'border-emerald-100 bg-emerald-50/70'}`}>
+                    <p className="font-medium text-slate-900">{item.title}</p>
+                    <p className="mt-1 text-sm text-slate-600">{item.reason}</p>
+                    <p className="mt-2 text-sm font-medium text-slate-800">下一步：{item.action}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-900">已有优势</h4>
+              <div className="mt-3 grid gap-2">
+                {diagnosis.strengths.length ? diagnosis.strengths.map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{item}</p>) : <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-500">继续积累作答、复盘和反馈记录后，这里会显示稳定优势。</p>}
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </Panel>
   )
@@ -1586,18 +1636,43 @@ function DiagnosisPanel({ diagnosis }: { diagnosis: Diagnosis | null }) {
 function ProfilePanel({ profile }: { profile: Profile | null }) {
   return (
     <Panel>
-      <h3 className="font-semibold">学生知识画像</h3>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">学生学习画像</h3>
+          <p className="mt-1 text-sm text-slate-500">画像展示学习行为与结果证据，不把缺少记录解释为能力不足。</p>
+        </div>
+        {profile && <span className={`rounded-md px-2.5 py-1 text-xs font-semibold ${profile.confidence.level === 'high' ? 'bg-emerald-50 text-emerald-700' : profile.confidence.level === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{profile.confidence.label}</span>}
+      </div>
       {!profile ? <p className="mt-4 text-sm text-slate-500">画像加载中。</p> : (
         <>
+          <p className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">{profile.confidence.detail}</p>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {profile.radar.map((item) => (
-              <div key={item.name} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center justify-between"><p>{item.name}</p><p className="font-semibold">{item.value}%</p></div>
-                <div className="mt-3 h-2 rounded-full bg-white"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, item.value)}%` }} /></div>
-              </div>
-            ))}
+            {profile.radar.map((item) => {
+              const value = item.value ?? 0
+              return (
+                <div key={item.name} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3"><p className="font-medium">{item.name}</p><p className="font-semibold text-slate-900">{item.value === null ? '待采样' : `${item.value}%`}</p></div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${value}%` }} /></div>
+                  <p className="mt-2 text-xs text-slate-400">{item.evidence}</p>
+                </div>
+              )
+            })}
           </div>
           <p className="mt-4 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-800">{profile.conclusion}</p>
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div>
+              <h4 className="font-semibold text-slate-900">下一阶段关注点</h4>
+              <div className="mt-3 grid gap-3">
+                {profile.focuses.map((item) => <div key={item.title} className="rounded-lg border border-slate-200 bg-white p-4"><p className="font-medium">{item.title}</p><p className="mt-1 text-sm text-slate-600">{item.action}</p></div>)}
+              </div>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-900">稳定表现</h4>
+              <div className="mt-3 grid gap-2">
+                {profile.strengths.length ? profile.strengths.map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{item}</p>) : <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-500">完成测验、打卡和错题复盘后，会逐步形成可比较的学习画像。</p>}
+              </div>
+            </div>
+          </div>
         </>
       )}
     </Panel>

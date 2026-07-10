@@ -3011,81 +3011,176 @@ def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Sessi
     ]
 
 
-@app.get("/courses/{course_id}/diagnosis")
-def get_course_diagnosis(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
-    course = require_course(db, course_id, user_id)
+def clamp_percent(value: float) -> int:
+    return max(0, min(100, round(value)))
 
+
+def build_course_learning_snapshot(db: Session, course_id: int, user_id: int) -> dict[str, object]:
+    course = require_course(db, course_id, user_id)
     documents_count = db.scalar(select(func.count()).select_from(Document).where(Document.course_id == course_id)) or 0
-    mistakes_count = db.scalar(select(func.count()).select_from(MistakeRecord).where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)) or 0
+    knowledge_count = db.scalar(select(func.count()).select_from(KnowledgePoint).where(KnowledgePoint.course_id == course_id)) or 0
     suggestions_count = db.scalar(select(func.count()).select_from(LearningSuggestion).where(LearningSuggestion.user_id == user_id, LearningSuggestion.course_id == course_id)) or 0
-    messages_count = db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id)) or 0
+    messages_count = db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id, ChatMessage.role == "user")) or 0
+    answers = db.scalars(
+        select(AnswerRecord)
+        .where(AnswerRecord.user_id == user_id, AnswerRecord.course_id == course_id)
+        .order_by(AnswerRecord.id.desc())
+    ).all()
+    mistakes = db.scalars(
+        select(MistakeRecord)
+        .where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)
+        .order_by(MistakeRecord.id.desc())
+    ).all()
     checkins = db.scalars(
         select(LearningCheckin)
         .where(LearningCheckin.user_id == user_id, LearningCheckin.course_id == course_id)
         .order_by(LearningCheckin.id.desc())
-        .limit(7)
     ).all()
-    recent_checkins = list(reversed(checkins))
+
+    answer_count = len(answers)
+    average_score = clamp_percent(sum(answer.score or 0 for answer in answers) / answer_count) if answer_count else None
+    correct_rate = clamp_percent(sum(1 for answer in answers if answer.is_correct) / answer_count * 100) if answer_count else None
+    mistakes_count = len(mistakes)
+    reviewed_mistakes = sum(1 for item in mistakes if item.review_status == "reviewed" or item.review_count > 0)
+    unresolved_mistakes = mistakes_count - reviewed_mistakes
+    review_rate = clamp_percent(reviewed_mistakes / mistakes_count * 100) if mistakes_count else None
+    checkin_count = len(checkins)
+    completed_checkins = sum(1 for item in checkins if item.status == "completed")
+    stuck_checkins = sum(1 for item in checkins if item.status == "stuck")
+    total_minutes = sum(max(0, item.minutes or 0) for item in checkins)
+    completion_rate = clamp_percent(completed_checkins / checkin_count * 100) if checkin_count else None
+    continuity = clamp_percent((completion_rate or 0) * 0.7 + min(30, total_minutes / 10)) if checkin_count else None
+
+    evidence_count = answer_count + min(checkin_count, 4) + min(mistakes_count, 3) + min(messages_count, 3)
+    if evidence_count >= 12:
+        confidence = {"level": "high", "label": "证据充分", "detail": f"已综合 {answer_count} 次作答、{checkin_count} 次打卡和 {mistakes_count} 条错题。"}
+    elif evidence_count >= 4:
+        confidence = {"level": "medium", "label": "证据有限", "detail": f"已综合 {answer_count} 次作答、{checkin_count} 次打卡和 {mistakes_count} 条错题。"}
+    else:
+        confidence = {"level": "low", "label": "样本不足", "detail": "当前记录较少，结论仅用于确定下一步学习动作。"}
+
+    recent_checkins = list(reversed(checkins[:7]))
     trend_dates = [item.study_date[5:] if len(item.study_date) >= 10 else item.study_date for item in recent_checkins]
-    trend_activity = [max(1, round(item.minutes / 20)) for item in recent_checkins]
+    trend_activity = [min(100, max(0, item.minutes or 0)) for item in recent_checkins]
     trend_mastery = []
-    running_mastery = max(0, course.mastery - len(recent_checkins) * 2)
+    running_mastery = course.mastery
     for item in recent_checkins:
         if item.status == "completed":
             running_mastery += 3
         elif item.status == "stuck":
-            running_mastery -= 2
+            running_mastery -= 3
         elif item.status == "studying":
             running_mastery += 1
-        trend_mastery.append(max(0, min(100, running_mastery)))
-
+        trend_mastery.append(clamp_percent(running_mastery))
     if not trend_dates:
-        trend_dates = ["暂无反馈"]
-        trend_activity = [0]
-        trend_mastery = [course.mastery]
+        trend_dates, trend_activity, trend_mastery = ["暂无记录"], [0], [course.mastery]
 
+    actions: list[dict[str, str]] = []
+    strengths: list[str] = []
+    if answer_count == 0:
+        actions.append({"title": "先完成一次自测", "reason": "尚无作答记录，无法判断知识掌握。", "action": "在测验中完成 5 道题，优先选择当前课程重点。", "tone": "amber"})
+    elif average_score is not None and average_score < 60:
+        actions.append({"title": "优先修复基础题", "reason": f"最近 {answer_count} 次作答平均得分为 {average_score}%。", "action": "先整理错题中的概念与公式，再完成同类题复测。", "tone": "red"})
+    elif average_score is not None and average_score >= 80:
+        strengths.append(f"近期作答平均得分 {average_score}%，基础练习表现稳定。")
+    if unresolved_mistakes:
+        actions.append({"title": "完成错题闭环", "reason": f"有 {unresolved_mistakes} 条错题尚未复盘。", "action": "逐条补充订正原因，并在复习后重新完成相似题。", "tone": "red"})
+    elif mistakes_count and review_rate == 100:
+        strengths.append("已记录的错题均有复盘痕迹，复习闭环较完整。")
+    if checkin_count == 0:
+        actions.append({"title": "记录学习反馈", "reason": "尚无学习打卡，无法判断投入和连续性。", "action": "在学习计划页完成一次反馈，填写时长和卡点。", "tone": "amber"})
+    elif continuity is not None and continuity < 50:
+        actions.append({"title": "提高学习连续性", "reason": f"已完成 {completed_checkins}/{checkin_count} 次打卡，共学习 {total_minutes} 分钟。", "action": "连续 3 天完成 20 分钟学习，并在当天提交反馈。", "tone": "amber"})
+    elif continuity is not None and continuity >= 70:
+        strengths.append(f"已完成 {completed_checkins}/{checkin_count} 次学习反馈，学习节奏较稳定。")
+    if messages_count >= 3:
+        strengths.append(f"已围绕课程提出 {messages_count} 个问题，具备主动澄清习惯。")
+    if not actions:
+        actions.append({"title": "保持当前节奏", "reason": "当前没有突出的风险信号。", "action": "继续按计划学习，并每周完成一次针对性自测。", "tone": "emerald"})
+
+    return {
+        "course": course,
+        "documents_count": documents_count,
+        "knowledge_count": knowledge_count,
+        "suggestions_count": suggestions_count,
+        "messages_count": messages_count,
+        "answer_count": answer_count,
+        "average_score": average_score,
+        "correct_rate": correct_rate,
+        "mistakes_count": mistakes_count,
+        "reviewed_mistakes": reviewed_mistakes,
+        "unresolved_mistakes": unresolved_mistakes,
+        "review_rate": review_rate,
+        "checkin_count": checkin_count,
+        "completed_checkins": completed_checkins,
+        "stuck_checkins": stuck_checkins,
+        "total_minutes": total_minutes,
+        "completion_rate": completion_rate,
+        "continuity": continuity,
+        "confidence": confidence,
+        "actions": actions[:3],
+        "strengths": strengths[:3],
+        "trend": {"dates": trend_dates, "mastery": trend_mastery, "activity": trend_activity},
+    }
+
+
+@app.get("/courses/{course_id}/diagnosis")
+def get_course_diagnosis(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
+    snapshot = build_course_learning_snapshot(db, course_id, user_id)
+    course = snapshot["course"]
+    has_mastery_evidence = bool(snapshot["answer_count"] or snapshot["mistakes_count"] or snapshot["checkin_count"])
     items = [
-        {"label": "课程进度", "value": course.progress, "status": "待开始" if course.progress <= 0 else "进行中"},
-        {"label": "掌握状态", "value": course.mastery, "status": "待诊断" if course.progress <= 0 else "已评估"},
-        {"label": "资料数量", "value": min(100, documents_count * 25), "status": f"{documents_count} 份资料"},
-        {"label": "错题风险", "value": min(100, mistakes_count * 20), "status": f"{mistakes_count} 条错题"},
-        {"label": "问答活跃度", "value": min(100, messages_count * 5), "status": f"{messages_count} 条消息"},
+        {"label": "课程掌握", "value": course.mastery if has_mastery_evidence else None, "status": f"课程当前估计 {course.mastery}%" if has_mastery_evidence else "尚无足够学习证据", "hint": "来自测验、错题和学习反馈带来的掌握度变化。", "tone": "emerald"},
+        {"label": "测验表现", "value": snapshot["average_score"], "status": f"{snapshot['answer_count']} 次作答，正确率 {snapshot['correct_rate']}%" if snapshot["answer_count"] else "尚无作答记录", "hint": "按已保存作答的得分计算。", "tone": "emerald" if (snapshot["average_score"] or 0) >= 80 else "amber"},
+        {"label": "学习连续性", "value": snapshot["continuity"], "status": f"{snapshot['completed_checkins']}/{snapshot['checkin_count']} 次完成，共 {snapshot['total_minutes']} 分钟" if snapshot["checkin_count"] else "尚无学习反馈", "hint": "综合完成率与累计学习时长。", "tone": "emerald" if (snapshot["continuity"] or 0) >= 70 else "amber"},
+        {"label": "错题闭环", "value": snapshot["review_rate"], "status": f"已复盘 {snapshot['reviewed_mistakes']}/{snapshot['mistakes_count']}，待处理 {snapshot['unresolved_mistakes']}" if snapshot["mistakes_count"] else "尚未记录错题", "hint": "以错题的复盘状态和复习次数为依据。", "tone": "emerald" if snapshot["unresolved_mistakes"] == 0 else "red"},
     ]
     return {
         "course_id": course_id,
         "course_name": course.name,
         "progress": course.progress,
         "mastery": course.mastery,
-        "documents_count": documents_count,
-        "mistakes_count": mistakes_count,
-        "suggestions_count": suggestions_count,
-        "messages_count": messages_count,
+        "documents_count": snapshot["documents_count"],
+        "knowledge_count": snapshot["knowledge_count"],
+        "mistakes_count": snapshot["mistakes_count"],
+        "messages_count": snapshot["messages_count"],
         "items": items,
-        "trend": {
-            "dates": trend_dates,
-            "mastery": trend_mastery,
-            "activity": trend_activity,
-        },
+        "confidence": snapshot["confidence"],
+        "actions": snapshot["actions"],
+        "strengths": snapshot["strengths"],
+        "trend": snapshot["trend"],
     }
 
 
 @app.get("/courses/{course_id}/profile")
 def get_course_profile(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
-    diagnosis = get_course_diagnosis(course_id, user_id, db)
-    progress = int(diagnosis["progress"])
-    mastery = int(diagnosis["mastery"])
-    mistakes_count = int(diagnosis["mistakes_count"])
-    messages_count = int(diagnosis["messages_count"])
-    suggestions_count = int(diagnosis["suggestions_count"])
+    snapshot = build_course_learning_snapshot(db, course_id, user_id)
+    course = snapshot["course"]
+    has_mastery_evidence = bool(snapshot["answer_count"] or snapshot["mistakes_count"] or snapshot["checkin_count"])
     radar = [
-        {"name": "理解力", "value": max(20, mastery)},
-        {"name": "专注度", "value": min(100, progress + 30)},
-        {"name": "练习量", "value": min(100, mistakes_count * 18 + 20)},
-        {"name": "复盘能力", "value": min(100, suggestions_count * 25 + max(0, 60 - mistakes_count * 8))},
-        {"name": "提问质量", "value": min(100, messages_count * 8 + 35)},
+        {"name": "知识掌握", "value": course.mastery if has_mastery_evidence else None, "evidence": f"课程当前掌握度 {course.mastery}%" if has_mastery_evidence else "尚无测验、错题或学习反馈"},
+        {"name": "练习表现", "value": snapshot["average_score"], "evidence": f"{snapshot['answer_count']} 次作答" if snapshot["answer_count"] else "尚无作答样本"},
+        {"name": "学习连续性", "value": snapshot["continuity"], "evidence": f"{snapshot['completed_checkins']}/{snapshot['checkin_count']} 次完成" if snapshot["checkin_count"] else "尚无学习反馈"},
+        {"name": "错题复盘", "value": snapshot["review_rate"], "evidence": f"已复盘 {snapshot['reviewed_mistakes']}/{snapshot['mistakes_count']} 条" if snapshot["mistakes_count"] else "尚无错题样本"},
+        {"name": "主动提问", "value": min(100, snapshot["messages_count"] * 20) if snapshot["messages_count"] else None, "evidence": f"已提出 {snapshot['messages_count']} 个课程问题" if snapshot["messages_count"] else "尚无课程提问"},
     ]
-    conclusion = "当前画像来自课程进度、问答、错题和学习建议统计。完成更多测验后画像会更准确。"
-    return {"course_id": course_id, "radar": radar, "conclusion": conclusion}
+    available = [item["value"] for item in radar if item["value"] is not None]
+    average = clamp_percent(sum(available) / len(available)) if available else 0
+    conclusion = f"当前画像基于 {snapshot['answer_count']} 次作答、{snapshot['checkin_count']} 次学习反馈、{snapshot['mistakes_count']} 条错题和 {snapshot['messages_count']} 个课程问题生成。"
+    if snapshot["confidence"]["level"] == "low":
+        conclusion += " 当前样本不足，优先完成一次测验和一次学习反馈后再比较变化。"
+    elif average >= 75:
+        conclusion += " 当前学习状态较稳定，可逐步增加综合题和迁移练习。"
+    else:
+        conclusion += " 建议先处理诊断中的优先动作，再通过短测验验证改进。"
+    return {
+        "course_id": course_id,
+        "radar": radar,
+        "confidence": snapshot["confidence"],
+        "focuses": snapshot["actions"],
+        "strengths": snapshot["strengths"],
+        "conclusion": conclusion,
+    }
 
 
 @app.post("/qa/ask", response_model=AskResponse)
