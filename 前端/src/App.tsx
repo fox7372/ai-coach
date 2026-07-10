@@ -1883,7 +1883,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         <div>
           <p className="text-sm font-medium text-emerald-700">资料入口</p>
           <h2 className="mt-1 text-3xl font-semibold text-slate-950">上传/导入资料</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">先选择加入已有课程，或切换为新建课程，再上传 PDF/PPT、导入视频或网页。</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">先选择加入已有课程，或切换为新建课程，再批量上传 PDF、PPT 或 Word，或导入视频和网页。</p>
         </div>
         <div className={`rounded-2xl border px-4 py-3 text-sm ${statusClass(status)}`}>
           {status === 'loading' ? '处理中' : status === 'success' ? '最近成功' : status === 'error' ? '需要处理' : '等待导入'}
@@ -1891,7 +1891,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       </div>
       <div className="mt-6 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
         <div className="grid gap-5">
-          <Panel className="bg-white/92">
+          <Panel className="order-1 bg-white/92">
             <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
               <div>
                 <p className="text-sm font-medium text-slate-800">资料加入到</p>
@@ -1921,7 +1921,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               )}
             </div>
           </Panel>
-          <Panel>
+          <Panel className="order-3">
             <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><BrainCircuit /></div>
               <div>
@@ -1979,19 +1979,27 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </div>
             )}
           </Panel>
-          <Panel>
-            <div className="flex items-center gap-3">
+          <Panel className="order-2 border-2 border-emerald-300 bg-emerald-50/70">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><FileText /></div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-950">批量导入文件资料</h3>
-                <p className="text-sm text-slate-500">一次可选择多份资料并导入同一课程；上传成功后才会生成或保留课程。</p>
+                  <h3 className="text-lg font-semibold text-slate-950">批量导入资料</h3>
+                  <p className="text-sm text-slate-600">选择多份文件后，一次加入当前课程。</p>
+                </div>
               </div>
+              <span className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-semibold text-white">最多 20 份</span>
             </div>
-            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <p className="font-semibold">支持 PDF、PPT/PPTX、Word DOCX</p>
-              <p className="mt-1 text-xs leading-5 text-emerald-800">PyMuPDF 适合文本层 PDF；Docling 适合复杂 PDF 和演示文稿；Word DOCX 使用正文和表格文本提取。</p>
-            </div>
-            <label className="mt-4 block text-sm font-medium">
+            <label className={`mt-4 flex cursor-pointer items-center justify-center gap-3 rounded-lg border-2 border-dashed border-emerald-400 bg-white px-4 py-6 text-center text-emerald-800 transition hover:border-emerald-600 hover:bg-emerald-100 ${status === 'loading' ? 'pointer-events-none opacity-60' : ''}`}>
+              <FileUp size={22} />
+              <span>
+                <span className="block text-base font-semibold">选择多份文件</span>
+                <span className="mt-1 block text-xs text-emerald-700">PDF、PPT/PPTX、Word DOCX</span>
+              </span>
+              <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx,.docx" multiple className="hidden" onChange={selectFiles} disabled={status === 'loading'} />
+            </label>
+            <p className="mt-2 text-sm text-slate-600">{selectedFiles.length ? `已选择 ${selectedFiles.length} 份资料，点击下方“开始批量导入”提交。` : '可按 Ctrl 或 Shift 一次选择多份文件。'}</p>
+            <label className="mt-4 block text-sm font-medium text-slate-700">
               PDF 解析方式
               <select
                 value={pdfParser}
@@ -2004,12 +2012,6 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </select>
             </label>
             <p className="mt-2 text-xs leading-5 text-slate-500">{pdfParserDetails[pdfParser].description}</p>
-            <label className={`primary-action mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${status === 'loading' ? 'cursor-not-allowed bg-slate-400' : 'cursor-pointer'}`}>
-              <FileUp size={16} />
-              选择资料
-              <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx,.docx" multiple className="hidden" onChange={selectFiles} disabled={status === 'loading'} />
-            </label>
-            <p className="mt-2 text-sm text-slate-500">{selectedFiles.length ? `已选择 ${selectedFiles.length} 份资料` : '尚未选择资料，支持 PDF、PPT、PPTX、DOCX'}</p>
             {selectedFiles.length > 0 && (
               <div className="mt-2 text-xs leading-5 text-slate-500">
                 {selectedFiles.slice(0, 3).map((file) => <p key={`${file.name}-${file.lastModified}`}>{file.name}</p>)}
@@ -2029,7 +2031,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button onClick={() => void uploadSelectedFiles()} disabled={status === 'loading'} className="primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
                   {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
-                  开始处理 {selectedFiles.length} 份
+                  开始批量导入 {selectedFiles.length} 份
                 </button>
                 <button type="button" onClick={cancelSelectedFiles} disabled={status === 'loading'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-red-200 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-400">
                   <Trash2 size={16} />
@@ -2038,7 +2040,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </div>
             )}
           </Panel>
-          <Panel>
+          <Panel className="order-4">
             <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Video /></div>
               <div>
@@ -2052,7 +2054,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               导入视频
             </button>
           </Panel>
-          <Panel>
+          <Panel className="order-5">
             <h3 className="text-lg font-semibold text-slate-950">导入网页资料</h3>
             <p className="mt-1 text-sm text-slate-500">例如课程主页、讲义页面。导入失败不会保留空课程。</p>
             <input value={webUrl} onChange={(event) => setWebUrl(event.target.value)} className="input-surface mt-4 w-full px-3 py-2.5 outline-none" />
