@@ -8,6 +8,7 @@ os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.main import parse_quiz_questions  # noqa: E402
+from app.ai_service import normalize_math_delimiters  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.main import list_chat_messages  # noqa: E402
 from app.models import ChatMessage, ChatSession, CourseModel, User  # noqa: E402
@@ -38,6 +39,12 @@ E: 它让用户态程序通过受控入口切换到内核态。
             "文件系统负责命名、组织、读取和写入文件。\n第二行解析也必须保留。",
         ),
     ]
+
+
+def test_normalize_math_delimiters_supports_legacy_inline_and_block_latex():
+    result = r"行内：\( \mathbf{A} \)。\n块：\[ c_{ij} = \sum_{k=1}^{n} a_{ik}b_{kj} \]"
+
+    assert normalize_math_delimiters(result) == "行内：$\\mathbf{A}$。\\n块：$$\nc_{ij} = \\sum_{k=1}^{n} a_{ik}b_{kj}\n$$"
 
 
 def test_chat_messages_return_newest_answer_first():

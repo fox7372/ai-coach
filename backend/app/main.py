@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-from app.ai_service import AIService, repair_mojibake
+from app.ai_service import AIService, normalize_math_delimiters, repair_mojibake
 from app.database import Base, SessionLocal, engine, get_db, settings
 from app.models import (
     AnswerRecord,
@@ -2775,13 +2775,13 @@ def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db:
             "id": answer.id,
             "course_id": answer.course_id,
             "question_id": answer.question_id,
-            "question": repair_mojibake(question.content or ""),
-            "student_answer": repair_mojibake(answer.student_answer or ""),
+            "question": normalize_math_delimiters(question.content or ""),
+            "student_answer": normalize_math_delimiters(answer.student_answer or ""),
             "is_correct": answer.is_correct,
             "score": answer.score,
-            "ai_feedback": repair_mojibake(answer.ai_feedback or ""),
-            "correct_answer": repair_mojibake(question.correct_answer or ""),
-            "explanation": repair_mojibake(question.explanation or ""),
+            "ai_feedback": normalize_math_delimiters(answer.ai_feedback or ""),
+            "correct_answer": normalize_math_delimiters(question.correct_answer or ""),
+            "explanation": normalize_math_delimiters(question.explanation or ""),
             "answered_at": answer.answered_at,
         }
         for answer, question in rows
@@ -3235,7 +3235,7 @@ def list_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | N
         ChatMessageOut(
             id=message.id,
             role=message.role,
-            content=repair_mojibake(message.content or ""),
+            content=normalize_math_delimiters(message.content or ""),
             created_at=message.created_at.isoformat() if message.created_at else "",
         )
         for message in messages
@@ -3263,7 +3263,7 @@ def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db:
         {
             "id": message.id,
             "role": message.role,
-            "content": repair_mojibake(message.content or ""),
+            "content": normalize_math_delimiters(message.content or ""),
             "created_at": message.created_at.isoformat() if message.created_at else "",
             "session_id": session.id,
             "session_title": session.title,

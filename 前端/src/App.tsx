@@ -309,7 +309,10 @@ function escapeRegExp(value: string) {
 }
 
 function MarkdownBlock({ children }: { children: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{children}</ReactMarkdown>
+  const normalized = repairMojibake(children)
+    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, '$$\n$1\n$$')
+    .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, '$$$1$')
+  return <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{normalized}</ReactMarkdown>
 }
 
 function DoclingParsingNotice({ message }: { message: string }) {
@@ -1306,7 +1309,7 @@ function QuizPanel({
       </div>
       {!questions.length && (
         <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
-          <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${repairMojibake(raw)}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
+          <MarkdownBlock>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</MarkdownBlock>
         </div>
       )}
       {!!questions.length && (
@@ -1320,7 +1323,7 @@ function QuizPanel({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-emerald-700">第 {index + 1} 题</p>
-                  <p className="mt-2 whitespace-pre-wrap font-medium text-slate-900">{questionContent}</p>
+                  <div className="mt-2 whitespace-pre-wrap font-medium text-slate-900"><MarkdownBlock>{questionContent}</MarkdownBlock></div>
                 </div>
                 <button onClick={() => void addToMistakeBook(question)} disabled={busyQuestionId === question.id || savedMistakes[question.id]} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400">
                   {savedMistakes[question.id] ? '已加入错题本' : '加入错题本'}
@@ -1329,7 +1332,7 @@ function QuizPanel({
 
               {mode === 'answer' ? (
                 <div className="markdown-answer mt-4 rounded-lg bg-white p-4">
-                  <ReactMarkdown>{`**参考答案**\n\n${correctAnswer}\n\n**解析**\n\n${explanation}`}</ReactMarkdown>
+                  <MarkdownBlock>{`**参考答案**\n\n${correctAnswer}\n\n**解析**\n\n${explanation}`}</MarkdownBlock>
                 </div>
               ) : (
                 <div className="mt-4">
@@ -1351,7 +1354,7 @@ function QuizPanel({
                   </div>
                   {evaluations[question.id] && (
                     <div className="markdown-answer mt-3 rounded-lg bg-white p-4">
-                      <ReactMarkdown>{repairMojibake(evaluations[question.id])}</ReactMarkdown>
+                      <MarkdownBlock>{evaluations[question.id]}</MarkdownBlock>
                     </div>
                   )}
                 </div>
@@ -1364,7 +1367,7 @@ function QuizPanel({
       {!!raw && !!questions.length && (
         <details open className="markdown-answer mt-4 rounded-lg border border-slate-200 bg-white p-4">
           <summary className="cursor-pointer font-medium text-slate-800">完整生成内容</summary>
-          <div className="mt-3 whitespace-pre-wrap break-words"><ReactMarkdown>{repairMojibake(raw)}</ReactMarkdown></div>
+          <div className="mt-3 whitespace-pre-wrap break-words"><MarkdownBlock>{raw}</MarkdownBlock></div>
         </details>
       )}
       <div className="mt-6 border-t border-slate-200 pt-5">
@@ -1374,14 +1377,14 @@ function QuizPanel({
             <div key={record.id} className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-slate-900">{repairMojibake(record.question)}</p>
+                  <div className="font-medium text-slate-900"><MarkdownBlock>{record.question}</MarkdownBlock></div>
                   <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">我的答案：{repairMojibake(record.student_answer) || '未填写'}</p>
                 </div>
                 <span className={`rounded-lg px-2 py-1 text-xs font-medium ${record.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>得分 {record.score}</span>
               </div>
               {record.ai_feedback && (
                 <div className="markdown-answer mt-3 rounded-lg bg-slate-50 p-3">
-                  <ReactMarkdown>{repairMojibake(record.ai_feedback)}</ReactMarkdown>
+                  <MarkdownBlock>{record.ai_feedback}</MarkdownBlock>
                 </div>
               )}
               <p className="mt-2 text-xs text-slate-400">{record.answered_at ? new Date(record.answered_at).toLocaleString() : '暂无时间'}</p>
@@ -2292,7 +2295,7 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
             const pairedQuestion = messages.slice(index + 1).find((item) => item.role === 'user')?.content
             return (
             <div key={message.id} className={`rounded-lg p-4 ${message.role === 'user' ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50'}`}>
-              <ReactMarkdown>{repairMojibake(message.content)}</ReactMarkdown>
+              <MarkdownBlock>{message.content}</MarkdownBlock>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 {message.created_at && <p className="text-xs text-slate-400">{new Date(message.created_at).toLocaleString()}</p>}
                 {message.role === 'assistant' && (
