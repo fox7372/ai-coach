@@ -1,5 +1,6 @@
 import base64
 import mimetypes
+import re
 from pathlib import Path
 
 from openai import OpenAI
@@ -22,6 +23,14 @@ def repair_mojibake(text: str) -> str:
     old_score = sum(text.count(marker) for marker in markers)
     new_score = sum(repaired.count(marker) for marker in markers)
     return repaired if new_score < old_score else text
+
+
+def normalize_math_delimiters(text: str) -> str:
+    """Convert legacy LaTex delimiters into the Markdown math form used by KaTeX."""
+    repaired = repair_mojibake(text)
+    repaired = re.sub(r"\\\[\s*([\s\S]*?)\s*\\\]", r"$$\n\1\n$$", repaired)
+    repaired = re.sub(r"\\\(\s*([\s\S]*?)\s*\\\)", r"$\1$", repaired)
+    return re.sub(r"\\\\(?=[A-Za-z])", r"\\", repaired)
 
 
 def model_supports_vision(model: str) -> bool:
@@ -72,6 +81,8 @@ class AIService:
             "不要臆造课程章节、实验编号、文件名或网页位置。"
             "回答结构必须包含：1. 直接结论；2. 原理/机制；3. 典型例子；4. 与课程资料的对应依据；5. 建议复习路径。"
             "解释专业术语时要准确，但语言保持适合学生理解。"
+            "数学公式必须使用 Markdown LaTex：行内公式用 `$...$`，独立公式用 `$$...$$`；"
+            "不要使用 `\\(...\\)` 或 `\\[...\\]` 作为公式定界符，矩阵行分隔使用 `\\\\`。"
         )
         user_content = question
         if context:
@@ -99,7 +110,7 @@ class AIService:
             **request_kwargs,
         )
         answer = response.choices[0].message.content or "AI 模型没有返回有效内容。"
-        return repair_mojibake(answer)
+        return normalize_math_delimiters(answer)
 
     def supports_vision(self) -> bool:
         return self.enabled and model_supports_vision(settings.ai_model)
@@ -134,4 +145,4 @@ class AIService:
             **request_kwargs,
         )
         answer = response.choices[0].message.content or "AI 模型没有返回有效内容。"
-        return repair_mojibake(answer)
+        return normalize_math_delimiters(answer)

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkMath from 'remark-math'
@@ -7,6 +7,7 @@ import {
   BookOpen,
   BrainCircuit,
   CheckCircle2,
+  Clock,
   ClipboardList,
   FileText,
   FileUp,
@@ -27,6 +28,7 @@ import { type Course } from './data'
 
 type User = { id: number; username: string; nickname: string | null }
 type ImportStatus = 'idle' | 'loading' | 'success' | 'error'
+type PdfParser = 'pymupdf' | 'docling'
 type MainView = 'courses' | 'detail' | 'upload' | 'settings'
 type DetailTab = 'overview' | 'resources' | 'qa' | 'knowledge' | 'plan' | 'quiz' | 'mistakes' | 'diagnosis' | 'profile'
 type AIConfig = { provider: string; model: string; base_url: string; has_api_key: boolean }
@@ -80,8 +82,24 @@ type ImageMistakeUploadResult = {
   analysis?: string
   mistake_id?: number | null
 }
-type Diagnosis = { progress: number; mastery: number; items: Array<{ label: string; value: number; status: string }> }
-type Profile = { radar: Array<{ name: string; value: number }>; conclusion: string }
+type InsightTone = 'emerald' | 'amber' | 'red'
+type EvidenceConfidence = { level: 'low' | 'medium' | 'high'; label: string; detail: string }
+type LearningAction = { title: string; reason: string; action: string; tone: InsightTone }
+type Diagnosis = {
+  progress: number
+  mastery: number
+  items: Array<{ label: string; value: number | null; status: string; hint: string; tone: InsightTone }>
+  confidence: EvidenceConfidence
+  actions: LearningAction[]
+  strengths: string[]
+}
+type Profile = {
+  radar: Array<{ name: string; value: number | null; evidence: string }>
+  confidence: EvidenceConfidence
+  focuses: LearningAction[]
+  strengths: string[]
+  conclusion: string
+}
 type ChatMessage = { id: number | string; role: 'user' | 'assistant'; content: string; created_at?: string }
 type ChatSession = { id: number; title: string; course_id: number; created_at: string; updated_at: string }
 type ChatSearchResult = ChatMessage & { session_id: number; session_title: string }
@@ -109,6 +127,159 @@ type PlanFeedback = {
   minutes: number
   difficulty: 'easy' | 'normal' | 'hard'
   feedback: string
+}
+
+function getErrorMessage(error: any, fallback: string) {
+  return error?.response?.data?.detail || error?.message || fallback
+}
+
+function repairMojibake(value: string | null | undefined) {
+  const text = value || ''
+  const markers = /(?:Ã|Â|â|ï¼|å|ç|è)/g
+  if (!markers.test(text) || [...text].some((char) => char.charCodeAt(0) > 255)) return text
+
+  try {
+    const decode = new TextDecoder('utf-8', { fatal: true })
+    const repaired = decode.decode(Uint8Array.from(text, (char) => char.charCodeAt(0)))
+    const score = (content: string) => (content.match(/(?:Ã|Â|â|ï¼|å|ç|è)/g) || []).length
+    return score(repaired) < score(text) ? repaired : text
+  } catch {
+    return text
+  }
+}
+
+function localDateString() {
+  const now = new Date()
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 10)
+}
+
+const pdfParserOptions: Array<{ value: PdfParser; label: string; description: string; loadingMessage: string }> = [
+  {
+    value: 'pymupdf',
+    label: 'PyMuPDF',
+    description: '速度最快，适合有文本层的 PDF。',
+    loadingMessage: '正在用 PyMuPDF 快速解析 PDF...',
+  },
+  {
+    value: 'docling',
+    label: 'Docling',
+    description: '结构化解析，适合版式复杂的 PDF，但耗时更长。',
+    loadingMessage: '正在用 Docling 结构化解析 PDF，可能较慢...',
+  },
+]
+
+const pdfParserDetails = Object.fromEntries(pdfParserOptions.map((option) => [option.value, option])) as Record<PdfParser, (typeof pdfParserOptions)[number]>
+
+type ImportEstimate = {
+  label: string
+  detail: string
+  minSeconds: number
+  maxSeconds: number
+}
+
+type ImportTiming = {
+  samples: number
+  secondsPerMb: number
+}
+
+const importTimingStorageKey = 'ai-learning-import-timings-v1'
+
+function formatDuration(seconds: number) {
+  if (seconds < 60) return `约 ${Math.max(10, Math.round(seconds / 10) * 10)} 秒`
+  const minutes = Math.max(1, Math.round(seconds / 60))
+  if (minutes < 60) return `约 ${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `约 ${hours} 小时 ${rest} 分钟` : `约 ${hours} 小时`
+}
+
+function formatDurationRange(minSeconds: number, maxSeconds: number) {
+  const minText = formatDuration(minSeconds).replace(/^约 /, '')
+  const maxText = formatDuration(maxSeconds).replace(/^约 /, '')
+  if (minText === maxText) return `约 ${minText}`
+  return `约 ${minText} - ${maxText}`
+}
+
+function importTimingKey(file: File, parser: PdfParser) {
+  const suffix = file.name.split('.').pop()?.toLowerCase() || ''
+  if (suffix === 'docx') return 'docx'
+  if (suffix === 'ppt' || suffix === 'pptx') return 'presentation-docling'
+  return parser === 'docling' ? 'pdf-docling' : 'pdf-pymupdf'
+}
+
+function readImportTimings(): Record<string, ImportTiming> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(importTimingStorageKey) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, ImportTiming> : {}
+  } catch {
+    return {}
+  }
+}
+
+function recordImportTimings(files: File[], results: Array<{ success: boolean; processing_seconds?: number }>, parser: PdfParser) {
+  const timings = readImportTimings()
+  files.forEach((file, index) => {
+    const result = results[index]
+    const elapsedSeconds = result?.processing_seconds
+    if (!result?.success || !elapsedSeconds || elapsedSeconds <= 0) return
+    const key = importTimingKey(file, parser)
+    const secondsPerMb = elapsedSeconds / Math.max(0.2, file.size / 1024 / 1024)
+    const previous = timings[key]
+    const samples = Math.min(8, (previous?.samples || 0) + 1)
+    const previousWeight = Math.max(0, samples - 1)
+    timings[key] = {
+      samples,
+      secondsPerMb: ((previous?.secondsPerMb || secondsPerMb) * previousWeight + secondsPerMb) / samples,
+    }
+  })
+  try {
+    window.localStorage.setItem(importTimingStorageKey, JSON.stringify(timings))
+  } catch {
+    // Estimation still works with the default profile when storage is unavailable.
+  }
+}
+
+function estimateImportTime(file: File, parser: PdfParser): ImportEstimate {
+  const suffix = file.name.split('.').pop()?.toLowerCase() || ''
+  const sizeMb = Math.max(0.2, file.size / 1024 / 1024)
+  const isPresentation = suffix === 'ppt' || suffix === 'pptx'
+  const effectiveParser: PdfParser = isPresentation ? 'docling' : parser
+
+  const expectedSeconds = effectiveParser === 'pymupdf'
+    ? 25 + sizeMb * 32
+    : 75 + sizeMb * 70
+  const timing = readImportTimings()[importTimingKey(file, parser)]
+  const calibratedSeconds = timing ? Math.max(8, timing.secondsPerMb * sizeMb) : expectedSeconds
+  const rangeRatio = timing ? (timing.samples >= 3 ? 0.2 : 0.35) : 0.45
+  const minSeconds = Math.max(8, calibratedSeconds * (1 - rangeRatio))
+  const maxSeconds = Math.max(20, calibratedSeconds * (1 + rangeRatio))
+
+  return {
+    label: formatDurationRange(minSeconds, maxSeconds),
+    maxSeconds,
+    minSeconds,
+    detail: timing
+      ? `基于本机最近 ${timing.samples} 次同类资料的实际处理速度校准。`
+      : effectiveParser === 'pymupdf'
+        ? '首次导入使用本机 CPU 的保守基线；完成后会按实际耗时自动校准。'
+        : '首次导入使用 Docling 的保守基线；完成后会按实际耗时自动校准。',
+  }
+}
+
+function estimateFilesImportTime(files: File[], parser: PdfParser): ImportEstimate | null {
+  if (!files.length) return null
+  const estimates = files.map((file) => estimateImportTime(file, parser))
+  const minSeconds = estimates.reduce((total, item) => total + item.minSeconds, 0)
+  const maxSeconds = estimates.reduce((total, item) => total + item.maxSeconds, 0)
+  const hasWord = files.some((file) => file.name.toLowerCase().endsWith('.docx'))
+  const hasPresentation = files.some((file) => /\.pptx?$/i.test(file.name))
+  const detail = hasPresentation
+    ? '批量任务会按顺序处理；PPT/PPTX 固定使用 Docling，Word 使用文本提取，PDF 按当前解析方式处理。'
+    : hasWord
+      ? '批量任务会按顺序处理；Word 使用文本提取，PDF 按当前解析方式处理。'
+      : estimates[0].detail
+  return { label: formatDurationRange(minSeconds, maxSeconds), minSeconds, maxSeconds, detail }
 }
 
 function statusClass(status: ImportStatus) {
@@ -154,7 +325,11 @@ function escapeRegExp(value: string) {
 }
 
 function MarkdownBlock({ children }: { children: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{children}</ReactMarkdown>
+  const normalized = repairMojibake(children)
+    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, '$$\n$1\n$$')
+    .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, '$$$1$')
+    .replace(/\\\\(?=[A-Za-z])/g, '\\')
+  return <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{normalized}</ReactMarkdown>
 }
 
 function DoclingParsingNotice({ message }: { message: string }) {
@@ -460,26 +635,37 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
 
   async function loadDetail() {
     if (!course) return
-    const [resourceResult, pointResult, suggestionResult, mistakeResult, diagnosisResult, profileResult, dailyResult, answerResult] = await Promise.all([
-      http.get(`/api/courses/${course.id}/resources`),
-      http.get(`/courses/${course.id}/knowledge-points`),
-      http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`),
-      http.get(`/mistakes?user_id=${userId}&course_id=${course.id}`),
-      http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`),
-      http.get(`/courses/${course.id}/profile?user_id=${userId}`),
-      http.post('/api/ai/daily-learning-plan', { user_id: userId, course_id: course.id }),
-      http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`),
+    const failures: string[] = []
+    const loadSection = async (label: string, request: () => Promise<unknown>, apply: (data: unknown) => void) => {
+      try {
+        apply(await request())
+      } catch (error: any) {
+        failures.push(`${label}：${getErrorMessage(error, '加载失败')}`)
+      }
+    }
+
+    await Promise.all([
+      loadSection('资料', () => http.get(`/api/courses/${course.id}/resources`), (data) => setResources(data as Resource[])),
+      loadSection('知识点', () => http.get(`/courses/${course.id}/knowledge-points`), (data) => setKnowledge(data as KnowledgePoint[])),
+      loadSection('学习计划', () => http.get(`/courses/${course.id}/learning-suggestions?user_id=${userId}`), (data) => {
+        const suggestionItems = data as Suggestion[]
+        const todayTitle = `每日学习计划 ${localDateString()}`
+        const todayPlan = suggestionItems.find((item) => item.title === todayTitle) || suggestionItems.find((item) => item.title.startsWith('每日学习计划'))
+        setSuggestions(suggestionItems)
+        setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
+        setDailyPlan(todayPlan?.content || '')
+      }),
+      loadSection('错题库', () => http.get(`/mistakes?user_id=${userId}&course_id=${course.id}`), (data) => setMistakes(data as Mistake[])),
+      loadSection('学习诊断', () => http.get(`/courses/${course.id}/diagnosis?user_id=${userId}`), (data) => setDiagnosis(data as Diagnosis)),
+      loadSection('学习画像', () => http.get(`/courses/${course.id}/profile?user_id=${userId}`), (data) => setProfile(data as Profile)),
+      loadSection('测验记录', () => http.get(`/api/quiz/answer-records?user_id=${userId}&course_id=${course.id}`), (data) => setQuizAnswerRecords(data as QuizAnswerRecord[])),
     ])
-    setResources(resourceResult as unknown as Resource[])
-    setKnowledge(pointResult as unknown as KnowledgePoint[])
-    const suggestionItems = suggestionResult as unknown as Suggestion[]
-    setSuggestions(suggestionItems)
-    setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
-    setMistakes(mistakeResult as unknown as Mistake[])
-    setDiagnosis(diagnosisResult as unknown as Diagnosis)
-    setProfile(profileResult as unknown as Profile)
-    setDailyPlan((dailyResult as unknown as { plan: string }).plan)
-    setQuizAnswerRecords(answerResult as unknown as QuizAnswerRecord[])
+
+    if (failures.length) {
+      setNotice(`部分模块加载失败：${failures.slice(0, 3).join('；')}`)
+    } else {
+      setNotice((current) => current.startsWith('部分模块加载失败') || current.startsWith('课程数据加载失败') ? '' : current)
+    }
   }
 
   useEffect(() => {
@@ -508,6 +694,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       const result = (await http.post('/api/ai/extract-knowledge-points', { user_id: userId, course_id: activeCourse.id, force })) as unknown as { message?: string; reused?: boolean }
       setNotice(result.message || (result.reused ? '已显示已有知识点。' : '已根据课程资料生成知识点。'))
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '知识点生成失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -527,7 +715,7 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       }
       return result
     } catch (error: any) {
-      setNotice(error?.code === 'ECONNABORTED' ? 'AI 生成时间较长，请稍后重试。' : error?.response?.data?.detail || '整体计划修改失败，请稍后再试。')
+      setNotice(error?.code === 'ECONNABORTED' ? 'AI 生成时间较长，请稍后重试。' : getErrorMessage(error, '整体计划修改失败，请稍后再试。'))
       return null
     } finally {
       setLoading(false)
@@ -545,6 +733,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       setDailyPlan(result.plan)
       setNotice('已根据你的反馈更新今日学习计划。')
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '今日学习计划更新失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -557,6 +747,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       setQuizRaw(result.raw)
       setQuizQuestions(result.questions || [])
       setNotice('测验题已生成。')
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '测验生成失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -577,6 +769,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       setManualMistake('')
       setNotice('错题已保存。')
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '错题保存失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -588,6 +782,8 @@ function CourseDetailView({ course, userId }: { course: Course | null; userId: n
       await http.delete(`/mistakes/${mistakeId}?user_id=${userId}`)
       setNotice('错题已删除。')
       await loadDetail()
+    } catch (error: any) {
+      setNotice(getErrorMessage(error, '错题删除失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -1062,6 +1258,8 @@ function QuizPanel({
       })) as unknown as { analysis: string; answer_record_id: number }
       setEvaluations((items) => ({ ...items, [question.id]: result.analysis }))
       await onAnswered()
+    } catch (error: any) {
+      setEvaluations((items) => ({ ...items, [question.id]: getErrorMessage(error, 'AI 判断失败，请稍后再试。') }))
     } finally {
       setBusyQuestionId(null)
     }
@@ -1088,6 +1286,8 @@ function QuizPanel({
       })
       setSavedMistakes((items) => ({ ...items, [question.id]: true }))
       await onMistakeSaved()
+    } catch (error: any) {
+      setEvaluations((items) => ({ ...items, [question.id]: getErrorMessage(error, '加入错题库失败。') }))
     } finally {
       setBusyQuestionId(null)
     }
@@ -1126,17 +1326,21 @@ function QuizPanel({
       </div>
       {!questions.length && (
         <div className="markdown-answer mt-4 rounded-lg bg-slate-50 p-4">
-          <ReactMarkdown>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</ReactMarkdown>
+          <MarkdownBlock>{raw ? `当前课程：${courseName}\n\n${raw}` : '当前课程还没有生成测验题。点击生成后，只会显示这门课的题目。'}</MarkdownBlock>
         </div>
       )}
       {!!questions.length && (
         <div className="mt-4 grid gap-4">
-          {questions.map((question, index) => (
+          {questions.map((question, index) => {
+            const questionContent = repairMojibake(question.content)
+            const correctAnswer = repairMojibake(question.correct_answer) || '暂无参考答案'
+            const explanation = repairMojibake(question.explanation) || '暂无解析'
+            return (
             <div key={question.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-emerald-700">第 {index + 1} 题</p>
-                  <p className="mt-2 whitespace-pre-wrap font-medium text-slate-900">{question.content}</p>
+                  <div className="mt-2 whitespace-pre-wrap font-medium text-slate-900"><MarkdownBlock>{questionContent}</MarkdownBlock></div>
                 </div>
                 <button onClick={() => void addToMistakeBook(question)} disabled={busyQuestionId === question.id || savedMistakes[question.id]} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400">
                   {savedMistakes[question.id] ? '已加入错题本' : '加入错题本'}
@@ -1145,7 +1349,7 @@ function QuizPanel({
 
               {mode === 'answer' ? (
                 <div className="markdown-answer mt-4 rounded-lg bg-white p-4">
-                  <ReactMarkdown>{`**参考答案**\n\n${question.correct_answer || '暂无参考答案'}\n\n**解析**\n\n${question.explanation || '暂无解析'}`}</ReactMarkdown>
+                  <MarkdownBlock>{`**参考答案**\n\n${correctAnswer}\n\n**解析**\n\n${explanation}`}</MarkdownBlock>
                 </div>
               ) : (
                 <div className="mt-4">
@@ -1167,14 +1371,21 @@ function QuizPanel({
                   </div>
                   {evaluations[question.id] && (
                     <div className="markdown-answer mt-3 rounded-lg bg-white p-4">
-                      <ReactMarkdown>{evaluations[question.id]}</ReactMarkdown>
+                      <MarkdownBlock>{evaluations[question.id]}</MarkdownBlock>
                     </div>
                   )}
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
+      )}
+      {!!raw && !!questions.length && (
+        <details open className="markdown-answer mt-4 rounded-lg border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer font-medium text-slate-800">完整生成内容</summary>
+          <div className="mt-3 whitespace-pre-wrap break-words"><MarkdownBlock>{raw}</MarkdownBlock></div>
+        </details>
       )}
       <div className="mt-6 border-t border-slate-200 pt-5">
         <h4 className="font-semibold text-slate-900">已保存的作答记录</h4>
@@ -1183,14 +1394,14 @@ function QuizPanel({
             <div key={record.id} className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-slate-900">{record.question}</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">我的答案：{record.student_answer || '未填写'}</p>
+                  <div className="font-medium text-slate-900"><MarkdownBlock>{record.question}</MarkdownBlock></div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">我的答案：{repairMojibake(record.student_answer) || '未填写'}</p>
                 </div>
                 <span className={`rounded-lg px-2 py-1 text-xs font-medium ${record.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>得分 {record.score}</span>
               </div>
               {record.ai_feedback && (
                 <div className="markdown-answer mt-3 rounded-lg bg-slate-50 p-3">
-                  <ReactMarkdown>{record.ai_feedback}</ReactMarkdown>
+                  <MarkdownBlock>{record.ai_feedback}</MarkdownBlock>
                 </div>
               )}
               <p className="mt-2 text-xs text-slate-400">{record.answered_at ? new Date(record.answered_at).toLocaleString() : '暂无时间'}</p>
@@ -1372,17 +1583,51 @@ function MistakesPanel({
 function DiagnosisPanel({ diagnosis }: { diagnosis: Diagnosis | null }) {
   return (
     <Panel>
-      <h3 className="font-semibold">学习诊断</h3>
-      {!diagnosis ? <p className="mt-4 text-sm text-slate-500">诊断加载中。</p> : (
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {diagnosis.items.map((item) => (
-            <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center justify-between"><p>{item.label}</p><p className="font-semibold text-emerald-700">{item.value}%</p></div>
-              <div className="mt-3 h-2 rounded-full bg-white"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, item.value)}%` }} /></div>
-              <p className="mt-2 text-sm text-slate-500">{item.status}</p>
-            </div>
-          ))}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">学习诊断</h3>
+          <p className="mt-1 text-sm text-slate-500">基于作答、错题、学习反馈和课程问答给出当前优先级。</p>
         </div>
+        {diagnosis && <span className={`rounded-md px-2.5 py-1 text-xs font-semibold ${diagnosis.confidence.level === 'high' ? 'bg-emerald-50 text-emerald-700' : diagnosis.confidence.level === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{diagnosis.confidence.label}</span>}
+      </div>
+      {!diagnosis ? <p className="mt-4 text-sm text-slate-500">诊断加载中。</p> : (
+        <>
+          <p className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">{diagnosis.confidence.detail}</p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {diagnosis.items.map((item) => {
+              const value = item.value ?? 0
+              const barClass = item.tone === 'red' ? 'bg-red-500' : item.tone === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'
+              return (
+                <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3"><p className="font-medium">{item.label}</p><p className="font-semibold text-slate-900">{item.value === null ? '待采样' : `${item.value}%`}</p></div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><div className={`h-2 rounded-full ${barClass}`} style={{ width: `${value}%` }} /></div>
+                  <p className="mt-2 text-sm text-slate-600">{item.status}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">{item.hint}</p>
+                </div>
+              )
+            })}
+          </div>
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div>
+              <h4 className="font-semibold text-slate-900">当前优先动作</h4>
+              <div className="mt-3 grid gap-3">
+                {diagnosis.actions.map((item) => (
+                  <div key={item.title} className={`rounded-lg border p-4 ${item.tone === 'red' ? 'border-red-100 bg-red-50/70' : item.tone === 'amber' ? 'border-amber-100 bg-amber-50/70' : 'border-emerald-100 bg-emerald-50/70'}`}>
+                    <p className="font-medium text-slate-900">{item.title}</p>
+                    <p className="mt-1 text-sm text-slate-600">{item.reason}</p>
+                    <p className="mt-2 text-sm font-medium text-slate-800">下一步：{item.action}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-900">已有优势</h4>
+              <div className="mt-3 grid gap-2">
+                {diagnosis.strengths.length ? diagnosis.strengths.map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{item}</p>) : <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-500">继续积累作答、复盘和反馈记录后，这里会显示稳定优势。</p>}
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </Panel>
   )
@@ -1391,18 +1636,43 @@ function DiagnosisPanel({ diagnosis }: { diagnosis: Diagnosis | null }) {
 function ProfilePanel({ profile }: { profile: Profile | null }) {
   return (
     <Panel>
-      <h3 className="font-semibold">学生知识画像</h3>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">学生学习画像</h3>
+          <p className="mt-1 text-sm text-slate-500">画像展示学习行为与结果证据，不把缺少记录解释为能力不足。</p>
+        </div>
+        {profile && <span className={`rounded-md px-2.5 py-1 text-xs font-semibold ${profile.confidence.level === 'high' ? 'bg-emerald-50 text-emerald-700' : profile.confidence.level === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{profile.confidence.label}</span>}
+      </div>
       {!profile ? <p className="mt-4 text-sm text-slate-500">画像加载中。</p> : (
         <>
+          <p className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">{profile.confidence.detail}</p>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {profile.radar.map((item) => (
-              <div key={item.name} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center justify-between"><p>{item.name}</p><p className="font-semibold">{item.value}%</p></div>
-                <div className="mt-3 h-2 rounded-full bg-white"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, item.value)}%` }} /></div>
-              </div>
-            ))}
+            {profile.radar.map((item) => {
+              const value = item.value ?? 0
+              return (
+                <div key={item.name} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3"><p className="font-medium">{item.name}</p><p className="font-semibold text-slate-900">{item.value === null ? '待采样' : `${item.value}%`}</p></div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${value}%` }} /></div>
+                  <p className="mt-2 text-xs text-slate-400">{item.evidence}</p>
+                </div>
+              )
+            })}
           </div>
           <p className="mt-4 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-800">{profile.conclusion}</p>
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div>
+              <h4 className="font-semibold text-slate-900">下一阶段关注点</h4>
+              <div className="mt-3 grid gap-3">
+                {profile.focuses.map((item) => <div key={item.title} className="rounded-lg border border-slate-200 bg-white p-4"><p className="font-medium">{item.title}</p><p className="mt-1 text-sm text-slate-600">{item.action}</p></div>)}
+              </div>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-900">稳定表现</h4>
+              <div className="mt-3 grid gap-2">
+                {profile.strengths.length ? profile.strengths.map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{item}</p>) : <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-500">完成测验、打卡和错题复盘后，会逐步形成可比较的学习画像。</p>}
+              </div>
+            </div>
+          </div>
         </>
       )}
     </Panel>
@@ -1414,7 +1684,8 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [selectedCourseId, setSelectedCourseId] = useState<number | ''>(courses[0]?.id || '')
   const [courseName, setCourseName] = useState('')
   const [learningGoal, setLearningGoal] = useState('')
-  const [fileName, setFileName] = useState('')
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [pdfParser, setPdfParser] = useState<PdfParser>('pymupdf')
   const [videoUrls, setVideoUrls] = useState('')
   const [webUrl, setWebUrl] = useState('https://jyywiki.cn/OS/2026/')
   const [status, setStatus] = useState<ImportStatus>('idle')
@@ -1423,6 +1694,13 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
   const [lastResource, setLastResource] = useState<Resource | null>(null)
   const [recommendedResources, setRecommendedResources] = useState<RecommendedResource[]>([])
   const [recommendedCourseId, setRecommendedCourseId] = useState<number | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const selectedFilesEstimate = useMemo(() => estimateFilesImportTime(selectedFiles, pdfParser), [selectedFiles, pdfParser])
+
+  useEffect(() => {
+    if (!selectedFiles.length || !selectedFilesEstimate || status !== 'idle') return
+    setMessage(`已选择 ${selectedFiles.length} 份资料，预计处理 ${selectedFilesEstimate.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
+  }, [selectedFiles, selectedFilesEstimate, status])
 
   useEffect(() => {
     if (courses.length && !courses.some((course) => course.id === Number(selectedCourseId))) {
@@ -1464,29 +1742,73 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
     }
   }
 
-  async function uploadFile(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (!file) return
-    setFileName(file.name)
+  function selectFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || [])
+    setSelectedFiles(files)
+    if (!files.length) return
+    const estimate = estimateFilesImportTime(files, pdfParser)
+    setStatus('idle')
+    setActiveImportKind(null)
+    setMessage(`已选择 ${files.length} 份资料，预计处理 ${estimate?.label}。点击“开始处理”才会上传并写入知识库；点击“取消上传”会直接丢弃本次选择。`)
+  }
+
+  function cancelSelectedFiles() {
+    setSelectedFiles([])
+    setActiveImportKind(null)
+    setStatus('idle')
+    setMessage('已取消本次文件选择，文件没有上传，也不会写入知识库。')
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  async function uploadSelectedFiles() {
+    const files = selectedFiles
+    if (!files.length) return
     setStatus('loading')
-    const suffix = file.name.split('.').pop()?.toLowerCase() || ''
-    const isPresentation = suffix === 'ppt' || suffix === 'pptx'
-    const parser = isPresentation ? 'docling' : 'pymupdf'
-    setActiveImportKind(parser === 'docling' ? 'docling' : 'normal')
-    setMessage(isPresentation ? '正在用 Docling 解析 PPT/PPTX，可能较慢...' : '正在用 PyMuPDF 快速解析 PDF...')
-    const finalName = file.name.replace(/\.[^.]+$/, '') || '未命名课程'
+    const usesDocling = files.some((file) => /\.pptx?$/i.test(file.name) || (file.name.toLowerCase().endsWith('.pdf') && pdfParser === 'docling'))
+    const hasWord = files.some((file) => file.name.toLowerCase().endsWith('.docx'))
+    const estimate = estimateFilesImportTime(files, pdfParser)
+    setActiveImportKind(usesDocling ? 'docling' : 'normal')
+    const processingMessage = usesDocling
+      ? '正在批量解析资料，包含 Docling 结构化任务...'
+      : hasWord
+        ? '正在批量提取 Word 和 PDF 文本...'
+        : pdfParserDetails[pdfParser].loadingMessage
+    setMessage(`${processingMessage} 预计 ${estimate?.label}。`)
+    const uploadTimeout = Math.max(usesDocling ? 300000 : 180000, Math.ceil((estimate?.maxSeconds || 180) * 1000 + 60000))
+    const finalName = files.length === 1
+      ? files[0].name.replace(/\.[^.]+$/, '') || '未命名课程'
+      : `${files[0].name.replace(/\.[^.]+$/, '')} 等 ${files.length} 份资料`
     const formData = new FormData()
-    formData.append('file', file)
+    files.forEach((file) => formData.append('files', file))
     let createdCourse: Course | null = null
     let created = false
     try {
-      const result = await resolveCourseForResource(finalName, `由资料 ${file.name} 自动创建`)
+      const result = await resolveCourseForResource(finalName, `由 ${files.length} 份资料自动创建`)
       createdCourse = result.course
       created = result.created
-      const uploadResult = await http.post(`/documents/upload?course_id=${createdCourse.id}&parser=${parser}`, formData, { timeout: 180000 }) as unknown as { chunk_count: number; message?: string }
+      const uploadResult = await http.post(`/documents/upload/batch?course_id=${createdCourse.id}&parser=${pdfParser}`, formData, { timeout: uploadTimeout }) as unknown as {
+        success_count: number
+        failed_count: number
+        results: Array<{ success: boolean; resource?: Resource; chunk_count?: number; processing_seconds?: number; error?: string }>
+      }
+      recordImportTimings(files, uploadResult.results, pdfParser)
+      const firstResource = uploadResult.results.find((item) => item.resource)?.resource || null
+      setLastResource(firstResource)
+      if (uploadResult.success_count === 0) {
+        await cleanupCourse(createdCourse, created)
+        setStatus('error')
+        setMessage(uploadResult.results.find((item) => item.error)?.error || '所有资料都导入失败，已清理本次新建课程。')
+        return
+      }
       setStatus('success')
       setActiveImportKind(null)
-      setMessage(`${isPresentation ? 'PPT/PPTX' : 'PDF'} 已加入《${createdCourse.name}》，生成 ${uploadResult.chunk_count} 个知识片段。`)
+      setMessage(`批量导入完成：已加入《${createdCourse.name}》，成功 ${uploadResult.success_count} 份，失败 ${uploadResult.failed_count} 份。`)
+      setSelectedFiles([])
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
       await onCoursesChanged()
     } catch (error: any) {
       if (createdCourse) await cleanupCourse(createdCourse, created)
@@ -1666,7 +1988,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
         <div>
           <p className="text-sm font-medium text-emerald-700">资料入口</p>
           <h2 className="mt-1 text-3xl font-semibold text-slate-950">上传/导入资料</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">先选择加入已有课程，或切换为新建课程，再上传 PDF/PPT、导入视频或网页。</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">先选择加入已有课程，或切换为新建课程，再批量上传 PDF、PPT 或 Word，或导入视频和网页。</p>
         </div>
         <div className={`rounded-2xl border px-4 py-3 text-sm ${statusClass(status)}`}>
           {status === 'loading' ? '处理中' : status === 'success' ? '最近成功' : status === 'error' ? '需要处理' : '等待导入'}
@@ -1674,7 +1996,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
       </div>
       <div className="mt-6 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
         <div className="grid gap-5">
-          <Panel className="bg-white/92">
+          <Panel className="order-1 bg-white/92">
             <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
               <div>
                 <p className="text-sm font-medium text-slate-800">资料加入到</p>
@@ -1704,7 +2026,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               )}
             </div>
           </Panel>
-          <Panel>
+          <Panel className="order-3">
             <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><BrainCircuit /></div>
               <div>
@@ -1762,26 +2084,68 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               </div>
             )}
           </Panel>
-          <Panel>
-            <div className="flex items-center gap-3">
+          <Panel className="order-2 border-2 border-emerald-300 bg-emerald-50/70">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><FileText /></div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-950">上传 PDF / PPT</h3>
-                <p className="text-sm text-slate-500">上传成功后才会生成或保留课程。PPT/PPTX 使用 Docling 解析。</p>
+                  <h3 className="text-lg font-semibold text-slate-950">批量导入资料</h3>
+                  <p className="text-sm text-slate-600">选择多份文件后，一次加入当前课程。</p>
+                </div>
               </div>
+              <span className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-semibold text-white">最多 20 份</span>
             </div>
-            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <p className="font-semibold">PDF 使用 PyMuPDF 快速解析</p>
-              <p className="mt-1 text-xs leading-5 text-emerald-800">适合当前 RAG 问答和知识点生成；Docling PDF 入口已关闭，避免上传后长时间卡住。PPT/PPTX 仍使用 Docling。</p>
-            </div>
-            <label className="primary-action mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold">
-              <FileUp size={16} />
-              选择文件
-              <input type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={uploadFile} />
+            <label className={`mt-4 flex cursor-pointer items-center justify-center gap-3 rounded-lg border-2 border-dashed border-emerald-400 bg-white px-4 py-6 text-center text-emerald-800 transition hover:border-emerald-600 hover:bg-emerald-100 ${status === 'loading' ? 'pointer-events-none opacity-60' : ''}`}>
+              <FileUp size={22} />
+              <span>
+                <span className="block text-base font-semibold">选择多份文件</span>
+                <span className="mt-1 block text-xs text-emerald-700">PDF、PPT/PPTX、Word DOCX</span>
+              </span>
+              <input ref={fileInputRef} type="file" accept=".pdf,.ppt,.pptx,.docx" multiple className="hidden" onChange={selectFiles} disabled={status === 'loading'} />
             </label>
-            <p className="mt-2 text-sm text-slate-500">{fileName || '尚未选择文件，支持 PDF、PPT、PPTX'}</p>
+            <p className="mt-2 text-sm text-slate-600">{selectedFiles.length ? `已选择 ${selectedFiles.length} 份资料，点击下方“开始批量导入”提交。` : '可按 Ctrl 或 Shift 一次选择多份文件。'}</p>
+            <label className="mt-4 block text-sm font-medium text-slate-700">
+              PDF 解析方式
+              <select
+                value={pdfParser}
+                onChange={(event) => setPdfParser(event.target.value as PdfParser)}
+                className="input-surface mt-2 w-full px-3 py-2.5 outline-none"
+              >
+                {pdfParserOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <p className="mt-2 text-xs leading-5 text-slate-500">{pdfParserDetails[pdfParser].description}</p>
+            {selectedFiles.length > 0 && (
+              <div className="mt-2 text-xs leading-5 text-slate-500">
+                {selectedFiles.slice(0, 3).map((file) => <p key={`${file.name}-${file.lastModified}`}>{file.name}</p>)}
+                {selectedFiles.length > 3 && <p>另有 {selectedFiles.length - 3} 份资料。</p>}
+              </div>
+            )}
+            {selectedFilesEstimate && (
+              <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Clock size={16} />
+                  批量预计处理时间：{selectedFilesEstimate.label}
+                </div>
+                <p className="mt-1 text-xs leading-5 text-sky-800">{selectedFilesEstimate.detail}</p>
+              </div>
+            )}
+            {selectedFiles.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button onClick={() => void uploadSelectedFiles()} disabled={status === 'loading'} className="primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:bg-slate-400">
+                  {status === 'loading' ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+                  开始批量导入 {selectedFiles.length} 份
+                </button>
+                <button type="button" onClick={cancelSelectedFiles} disabled={status === 'loading'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-red-200 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-400">
+                  <Trash2 size={16} />
+                  取消上传
+                </button>
+              </div>
+            )}
           </Panel>
-          <Panel>
+          <Panel className="order-4">
             <div className="flex items-center gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Video /></div>
               <div>
@@ -1795,7 +2159,7 @@ function UploadView({ userId, courses, onCoursesChanged }: { userId: number; cou
               导入视频
             </button>
           </Panel>
-          <Panel>
+          <Panel className="order-5">
             <h3 className="text-lg font-semibold text-slate-950">导入网页资料</h3>
             <p className="mt-1 text-sm text-slate-500">例如课程主页、讲义页面。导入失败不会保留空课程。</p>
             <input value={webUrl} onChange={(event) => setWebUrl(event.target.value)} className="input-surface mt-4 w-full px-3 py-2.5 outline-none" />
@@ -1902,14 +2266,14 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
     if (!course || !question.trim()) return
     const current = question.trim()
     setQuestion('')
-    setMessages((items) => [...items, { id: `u-${Date.now()}`, role: 'user', content: current }])
+    setMessages((items) => [{ id: `u-${Date.now()}`, role: 'user', content: current }, ...items])
     setLoading(true)
     try {
       const result = (await http.post('/qa/ask', { question: current, course_id: course.id, user_id: userId, session_id: activeSessionId })) as unknown as { answer: string; assistant_message_id: number }
-      setMessages((items) => [...items, { id: result.assistant_message_id, role: 'assistant', content: result.answer }])
+      setMessages((items) => [{ id: result.assistant_message_id, role: 'assistant', content: result.answer }, ...items])
       await loadSessions(activeSessionId || undefined)
     } catch (error: any) {
-      setMessages((items) => [...items, { id: `e-${Date.now()}`, role: 'assistant', content: error?.response?.data?.detail || '问答失败' }])
+      setMessages((items) => [{ id: `e-${Date.now()}`, role: 'assistant', content: error?.response?.data?.detail || '问答失败' }, ...items])
     } finally {
       setLoading(false)
     }
@@ -1974,7 +2338,7 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
             {searchResults.map((item) => (
               <button key={`${item.session_id}-${item.id}`} onClick={() => void loadMessages(item.session_id)} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-left hover:border-emerald-300">
                 <p className="text-xs font-semibold text-emerald-700">{item.session_title}</p>
-                <p className="mt-1 line-clamp-3 text-sm text-slate-600">{item.content}</p>
+                <p className="mt-1 line-clamp-3 text-sm text-slate-600">{repairMojibake(item.content)}</p>
               </button>
             ))}
             {!searchResults.length && <p className="text-sm text-slate-500">没有匹配的历史记录。</p>}
@@ -2001,16 +2365,18 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
         <h3 className="font-semibold">AI 问答</h3>
         <p className="mt-1 text-sm text-slate-500">当前课程：{course.name}</p>
         {mistakeMessage && <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{mistakeMessage}</p>}
-        <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
+        <div className="mt-4 grid gap-3">
           {historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">正在加载历史...</div>}
-          {messages.map((message, index) => (
+          {messages.map((message, index) => {
+            const pairedQuestion = messages.slice(index + 1).find((item) => item.role === 'user')?.content
+            return (
             <div key={message.id} className={`rounded-lg p-4 ${message.role === 'user' ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50'}`}>
-              <ReactMarkdown>{message.content}</ReactMarkdown>
+              <MarkdownBlock>{message.content}</MarkdownBlock>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 {message.created_at && <p className="text-xs text-slate-400">{new Date(message.created_at).toLocaleString()}</p>}
                 {message.role === 'assistant' && (
                   <button
-                    onClick={() => void saveAnswerAsMistake(message, messages[index - 1]?.role === 'user' ? messages[index - 1].content : '')}
+                    onClick={() => void saveAnswerAsMistake(message, pairedQuestion)}
                     disabled={savingMistakeId === message.id}
                     className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:text-slate-400"
                   >
@@ -2020,7 +2386,8 @@ function QaView({ course, userId, onMistakeSaved }: { course: Course | null; use
                 )}
               </div>
             </div>
-          ))}
+            )
+          })}
           {!messages.length && !historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">选择一个历史对话，或新建对话后开始提问。</div>}
           {loading && <LoadingNotice text="AI 正在检索课程资料并生成回答..." />}
         </div>

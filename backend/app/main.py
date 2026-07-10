@@ -4,8 +4,9 @@ import json
 import math
 import re
 import socket
-from hashlib import md5, sha256
-from datetime import date
+import time
+from hashlib import sha256
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -20,7 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-from app.ai_service import AIService, repair_mojibake
+from app.ai_service import AIService, normalize_math_delimiters, repair_mojibake
 from app.database import Base, SessionLocal, engine, get_db, settings
 from app.models import (
     AnswerRecord,
@@ -37,6 +38,7 @@ from app.models import (
     Question,
     User,
 )
+from app.rag_service import hash_embedding, rag_service
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -392,18 +394,18 @@ def format_time(seconds: float | None) -> str:
     return f"{minutes:02d}:{sec:02d}"
 
 
-def make_embedding(text_value: str, dimensions: int = 96) -> list[float]:
-    vector = [0.0] * dimensions
-    tokens = re.findall(r"[\w\u4e00-\u9fff]+", text_value.lower())
-    if not tokens:
-        tokens = list(text_value[:500])
-    for token in tokens:
-        digest = md5(token.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:4], "big") % dimensions
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
-        vector[index] += sign
-    norm = math.sqrt(sum(item * item for item in vector)) or 1.0
-    return [round(item / norm, 6) for item in vector]
+def make_embedding(text_value: str) -> list[float]:
+    try:
+        return rag_service.embed_text(text_value)
+    except Exception:
+        return hash_embedding(text_value)
+
+
+def make_embeddings(text_values: list[str]) -> list[list[float]]:
+    try:
+        return rag_service.embed_texts(text_values)
+    except Exception:
+        return [hash_embedding(text_value) for text_value in text_values]
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -413,7 +415,94 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(left[index] * right[index] for index in range(size))
 
 
+def index_chunk_in_chroma(db: Session, chunk: DocumentChunk) -> None:
+    try:
+        embedding = json.loads(chunk.embedding or "[]")
+        if not embedding:
+            embedding = make_embedding(chunk.chunk_text)
+            chunk.embedding = json.dumps(embedding, ensure_ascii=False)
+            db.flush()
+        metadata = json.loads(chunk.metadata_json or "{}")
+        metadata.update(
+            {
+                "page_number": chunk.page_number,
+                "start_time": chunk.start_time,
+                "end_time": chunk.end_time,
+                "section_title": chunk.section_title,
+                "source_url": chunk.source_url,
+                "chunk_index": chunk.chunk_index,
+            }
+        )
+        clean_metadata = {key: value for key, value in metadata.items() if value is not None}
+        rag_service.index_chunk(
+            chunk_id=chunk.id,
+            document_id=chunk.document_id,
+            course_id=chunk.course_id,
+            text=chunk.chunk_text,
+            embedding=[float(value) for value in embedding],
+            metadata=clean_metadata,
+        )
+    except Exception:
+        # The database row remains usable as a fallback if Chroma or local models are unavailable.
+        return
+
+
+def index_chunks_in_chroma(chunks: list[DocumentChunk]) -> None:
+    items: list[dict[str, object]] = []
+    for chunk in chunks:
+        try:
+            embedding = json.loads(chunk.embedding or "[]")
+            metadata = json.loads(chunk.metadata_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not embedding:
+            continue
+        metadata.update(
+            {
+                "chunk_id": chunk.id,
+                "document_id": chunk.document_id,
+                "course_id": chunk.course_id,
+                "page_number": chunk.page_number,
+                "start_time": chunk.start_time,
+                "end_time": chunk.end_time,
+                "section_title": chunk.section_title,
+                "source_url": chunk.source_url,
+                "chunk_index": chunk.chunk_index,
+            }
+        )
+        clean_metadata = {key: value for key, value in metadata.items() if value is not None}
+        items.append(
+            {
+                "id": f"chunk-{chunk.id}",
+                "text": chunk.chunk_text,
+                "embedding": [float(value) for value in embedding],
+                "metadata": clean_metadata,
+            }
+        )
+
+    try:
+        rag_service.index_chunks(items)
+    except Exception:
+        return
+
+
 def retrieve_relevant_chunks(db: Session, course_id: int, query: str, limit: int = 5) -> list[tuple[DocumentChunk, float]]:
+    try:
+        candidates = rag_service.query(course_id, query, candidates=30)
+        reranked = rag_service.rerank(query, candidates, limit=limit)
+        retrieved: list[tuple[DocumentChunk, float]] = []
+        for item in reranked:
+            metadata = item.get("metadata") or {}
+            chunk_id = int(metadata.get("chunk_id") or 0)
+            chunk = db.get(DocumentChunk, chunk_id)
+            if chunk is not None:
+                score = float(item.get("rerank_score") or item.get("dot_score") or 0.0)
+                retrieved.append((chunk, score))
+        if retrieved:
+            return retrieved
+    except Exception:
+        pass
+
     query_vector = make_embedding(query)
     chunks = db.scalars(
         select(DocumentChunk)
@@ -894,20 +983,30 @@ def save_document_chunks(
     source_type: str,
     pages: list[dict[str, object]] | None = None,
 ) -> int:
+    try:
+        rag_service.delete_document(document.id)
+    except Exception:
+        pass
     db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
     chunk_index = 0
     chunks = split_text_to_chunks(structured_text)
     if not chunks:
         raise RuntimeError("资料没有切分出可用片段。")
 
-    for chunk_text in chunks:
+    embeddings = make_embeddings(chunks)
+    pending_index: list[DocumentChunk] = []
+    for chunk_text, embedding in zip(chunks, embeddings):
         page_number = find_chunk_page_number(chunk_text, pages or []) if pages else None
         if page_number:
             section_title = f"第 {page_number} 页片段"
         elif source_type == "presentation":
             section_title = f"Docling 演示文稿片段 {chunk_index + 1}"
-        else:
+        elif parser_name == "pymupdf":
+            section_title = f"PyMuPDF 片段 {chunk_index + 1}"
+        elif parser_name == "docling":
             section_title = f"Docling 结构化片段 {chunk_index + 1}"
+        else:
+            section_title = f"资料片段 {chunk_index + 1}"
         metadata = {
             "resource_title": document.filename,
             "source_type": source_type,
@@ -916,46 +1015,48 @@ def save_document_chunks(
         if page_number:
             metadata["page_number"] = page_number
 
-        db.add(
-            DocumentChunk(
-                document_id=document.id,
-                course_id=document.course_id,
-                chunk_text=chunk_text,
-                page_number=page_number,
-                start_time=None,
-                end_time=None,
-                section_title=section_title,
-                source_url=None,
-                metadata_json=json.dumps(metadata, ensure_ascii=False),
-                token_count=len(chunk_text),
-                chunk_index=chunk_index,
-                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-            )
+        chunk = DocumentChunk(
+            document_id=document.id,
+            course_id=document.course_id,
+            chunk_text=chunk_text,
+            page_number=page_number,
+            start_time=None,
+            end_time=None,
+            section_title=section_title,
+            source_url=None,
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+            token_count=len(chunk_text),
+            chunk_index=chunk_index,
+            embedding=json.dumps(embedding, ensure_ascii=False),
         )
+        db.add(chunk)
+        db.flush()
+        pending_index.append(chunk)
         chunk_index += 1
+    index_chunks_in_chroma(pending_index)
     return chunk_index
 
 
 def process_pdf_document(db: Session, document: Document, parser: str = "pymupdf") -> None:
     document.status = "processing"
     document.parse_status = "processing"
-    document.progress_stage = "pymupdf_extract_pdf" if parser == "pymupdf" else "docling_extract_pdf"
+    document.progress_stage = f"{parser}_extract_pdf"
     document.error_message = None
     db.commit()
 
     try:
         path = Path(document.storage_path)
         pages: list[dict[str, object]] = []
-        parser_name = parser if parser in {"docling", "pymupdf"} else "docling"
+        parser_name = parser if parser in {"docling", "pymupdf"} else "pymupdf"
         if parser_name == "pymupdf":
             pages = extract_pdf_pages(path)
-            structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+            structured_text = "\n\n".join(str(page["text"]) for page in pages)
         else:
             try:
                 structured_text = extract_pdf_with_docling(path)
             except Exception:
                 pages = extract_pdf_pages(path)
-                structured_text = "\n\n".join(f"第 {page['page_number']} 页\n{page['text']}" for page in pages)
+                structured_text = "\n\n".join(str(page["text"]) for page in pages)
                 parser_name = "pymupdf"
             else:
                 try:
@@ -992,6 +1093,48 @@ def process_presentation_document(db: Session, document: Document) -> None:
         document.status = "ready"
         document.parse_status = "ready"
         document.progress_stage = f"completed:{chunk_count} chunks:docling"
+        db.commit()
+    except Exception as exc:
+        document.status = "failed"
+        document.parse_status = "failed"
+        document.progress_stage = "failed"
+        document.error_message = clean_error_message(exc)
+        db.commit()
+
+
+def extract_docx_text(path: Path) -> str:
+    try:
+        from docx import Document as WordDocument
+    except ImportError as exc:
+        raise RuntimeError("后端缺少 python-docx，请先安装 requirements.txt") from exc
+
+    word_document = WordDocument(path)
+    parts = [paragraph.text.strip() for paragraph in word_document.paragraphs if paragraph.text.strip()]
+    for table in word_document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    text_value = "\n\n".join(parts).strip()
+    if not text_value:
+        raise RuntimeError("Word 文档没有提取到可用文本。")
+    return text_value
+
+
+def process_word_document(db: Session, document: Document) -> None:
+    document.status = "processing"
+    document.parse_status = "processing"
+    document.progress_stage = "python_docx_extract"
+    document.error_message = None
+    db.commit()
+
+    try:
+        structured_text = extract_docx_text(Path(document.storage_path))
+        chunk_count = save_document_chunks(db, document, structured_text, "python-docx", "word")
+        document.raw_content = structured_text
+        document.status = "ready"
+        document.parse_status = "ready"
+        document.progress_stage = f"completed:{chunk_count} chunks:python-docx"
         db.commit()
     except Exception as exc:
         document.status = "failed"
@@ -1301,7 +1444,20 @@ def ensure_resource_schema() -> None:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 
+def require_course(db: Session, course_id: int, user_id: int | None = None) -> CourseModel:
+    if user_id is None:
+        course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
+    else:
+        course = db.scalar(select(CourseModel).where(CourseModel.id == course_id, CourseModel.user_id == user_id))
+    if course is None:
+        detail = "课程不存在或不属于当前用户" if user_id is not None else "课程不存在"
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+    return course
+
+
 def ensure_default_chat_session(db: Session, user_id: int, course_id: int) -> ChatSession:
+    require_course(db, course_id, user_id)
+
     session = db.scalar(
         select(ChatSession)
         .where(ChatSession.user_id == user_id, ChatSession.course_id == course_id)
@@ -1342,6 +1498,10 @@ def health(db: Session = Depends(get_db)) -> dict[str, object]:
     return {
         "status": "ok",
         "database": "connected",
+        "rag_vector_store": "chroma" if rag_service.ready() else "unavailable",
+        "embedding_model": settings.embedding_model,
+        "reranker_model": settings.reranker_model,
+        "rag_device": rag_service.device(),
         "ai_provider": settings.ai_provider if ai_service.enabled else "mock",
         "ai_model": settings.ai_model,
     }
@@ -1544,6 +1704,10 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     documents = db.scalars(select(Document).where(Document.course_id == course_id)).all()
     deleted_files = 0
     for document in documents:
+        try:
+            rag_service.delete_document(document.id)
+        except Exception:
+            pass
         if delete_uploaded_file(document.storage_path):
             deleted_files += 1
 
@@ -1569,25 +1733,25 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict[str, ob
     }
 
 
-@app.post("/documents/upload")
-async def upload_document(
-    course_id: int = 1,
-    parser: Literal["pymupdf", "docling"] = "pymupdf",
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-) -> dict[str, object]:
-    suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
-    filename = file.filename or "document.pdf"
-    file_type = suffix.lstrip(".").lower()
-    if file_type not in {"pdf", "ppt", "pptx"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持 PDF、PPT、PPTX 资料上传")
+async def save_uploaded_document(
+    db: Session,
+    course_id: int,
+    parser: Literal["pymupdf", "docling"],
+    file: UploadFile,
+) -> tuple[Document, int, float]:
+    suffix = Path(file.filename or "document.pdf").suffix.lower() or ".pdf"
+    filename = Path(file.filename or "document.pdf").name
+    file_type = suffix.lstrip(".")
+    if file_type not in {"pdf", "ppt", "pptx", "docx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持 PDF、PPT、PPTX、DOCX 资料上传")
     exists = db.scalar(select(Document).where(Document.course_id == course_id, Document.filename == filename))
     if exists is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该课程已经上传过同名文件，请不要重复上传")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"该课程已经上传过同名文件：{filename}")
 
-    document_id = str(uuid4())
-    target = UPLOAD_DIR / f"{document_id}{suffix}"
-    target.write_bytes(await file.read())
+    target = UPLOAD_DIR / f"{uuid4()}{suffix}"
+    with target.open("wb") as output:
+        while content := await file.read(1024 * 1024):
+            output.write(content)
 
     document = Document(
         course_id=course_id,
@@ -1595,32 +1759,79 @@ async def upload_document(
         file_type=file_type,
         storage_path=str(target),
         parse_status="processing",
+        source_type="word" if file_type == "docx" else None,
     )
     db.add(document)
     db.commit()
     db.refresh(document)
 
-    if document.file_type.lower() == "pdf":
+    processing_started = time.perf_counter()
+    if file_type == "pdf":
         process_pdf_document(db, document, parser)
-        db.refresh(document)
-    elif document.file_type.lower() in {"ppt", "pptx"}:
+    elif file_type in {"ppt", "pptx"}:
         process_presentation_document(db, document)
-        db.refresh(document)
     else:
-        document.status = "uploaded"
-        document.parse_status = "uploaded"
-        document.progress_stage = "saved_without_parser"
-        db.commit()
-        db.refresh(document)
-
+        process_word_document(db, document)
+    db.refresh(document)
     chunk_count = db.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document.id)) or 0
+    return document, int(chunk_count), round(time.perf_counter() - processing_started, 2)
+
+
+def uploaded_document_response(document: Document, chunk_count: int, processing_seconds: float) -> dict[str, object]:
     return {
         "document_id": str(document.id),
         "filename": document.filename,
         "status": document.parse_status,
-        "chunk_count": int(chunk_count),
+        "chunk_count": chunk_count,
+        "processing_seconds": processing_seconds,
         "parser": document.progress_stage,
         "message": "资料已解析并写入 RAG 切块。" if chunk_count else document.error_message or "文件已保存，但没有生成 RAG 切块。",
+    }
+
+
+@app.post("/documents/upload")
+async def upload_document(
+    course_id: int = 1,
+    parser: Literal["pymupdf", "docling"] = "pymupdf",
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_course(db, course_id)
+    document, chunk_count, processing_seconds = await save_uploaded_document(db, course_id, parser, file)
+    return uploaded_document_response(document, chunk_count, processing_seconds)
+
+
+@app.post("/documents/upload/batch")
+async def upload_documents_batch(
+    course_id: int = 1,
+    parser: Literal["pymupdf", "docling"] = "pymupdf",
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_course(db, course_id)
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请至少选择一份资料")
+    if len(files) > 20:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="单次最多导入 20 份资料")
+
+    results: list[dict[str, object]] = []
+    for file in files:
+        filename = Path(file.filename or "未命名文件").name
+        try:
+            document, chunk_count, processing_seconds = await save_uploaded_document(db, course_id, parser, file)
+            results.append({"success": document.parse_status == "ready", "resource": document_to_resource(db, document), **uploaded_document_response(document, chunk_count, processing_seconds)})
+        except HTTPException as exc:
+            results.append({"success": False, "filename": filename, "error": str(exc.detail)})
+        except Exception as exc:
+            results.append({"success": False, "filename": filename, "error": clean_error_message(exc)})
+
+    success_count = sum(1 for item in results if item["success"])
+    return {
+        "course_id": course_id,
+        "success_count": success_count,
+        "failed_count": len(results) - success_count,
+        "results": results,
+        "message": f"批量导入完成：成功 {success_count} 份，失败 {len(results) - success_count} 份。",
     }
 
 
@@ -1698,6 +1909,10 @@ def process_video_document(db: Session, document: Document, preferred_language: 
         document.language = language
         document.subtitle_type = subtitle_type
         document.progress_stage = "chunk_and_embed"
+        try:
+            rag_service.delete_document(document.id)
+        except Exception:
+            pass
         db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         chunks = merge_segments_to_chunks(segments)
         for index, chunk in enumerate(chunks):
@@ -1705,31 +1920,32 @@ def process_video_document(db: Session, document: Document, preferred_language: 
             start_time = float(chunk["start"])
             end_time = float(chunk["end"])
             timestamp_url = build_timestamp_url(document.source_url, start_time)
-            db.add(
-                DocumentChunk(
-                    document_id=document.id,
-                    course_id=document.course_id,
-                    chunk_text=chunk_text,
-                    page_number=None,
-                    start_time=start_time,
-                    end_time=end_time,
-                    section_title=f"{format_time(start_time)} - {format_time(end_time)}",
-                    source_url=timestamp_url,
-                    metadata_json=json.dumps(
-                        {
-                            "resource_title": document.filename,
-                            "platform": document.platform,
-                            "subtitle_type": subtitle_type,
-                            "language": language,
-                            "source_url": timestamp_url,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    token_count=len(chunk_text),
-                    chunk_index=index,
-                    embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-                )
+            db_chunk = DocumentChunk(
+                document_id=document.id,
+                course_id=document.course_id,
+                chunk_text=chunk_text,
+                page_number=None,
+                start_time=start_time,
+                end_time=end_time,
+                section_title=f"{format_time(start_time)} - {format_time(end_time)}",
+                source_url=timestamp_url,
+                metadata_json=json.dumps(
+                    {
+                        "resource_title": document.filename,
+                        "platform": document.platform,
+                        "subtitle_type": subtitle_type,
+                        "language": language,
+                        "source_url": timestamp_url,
+                    },
+                    ensure_ascii=False,
+                ),
+                token_count=len(chunk_text),
+                chunk_index=index,
+                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
             )
+            db.add(db_chunk)
+            db.flush()
+            index_chunk_in_chroma(db, db_chunk)
 
         document.status = "ready"
         document.parse_status = "ready"
@@ -1765,9 +1981,7 @@ def preview_video(payload: VideoPreviewRequest) -> dict[str, object]:
 
 @app.post("/api/courses/{course_id}/resources/video", response_model=ResourceOut)
 def create_video_resource(course_id: int, payload: VideoResourceCreate, db: Session = Depends(get_db)) -> ResourceOut:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    require_course(db, course_id)
 
     url = normalize_video_url(payload.url)
     duplicate = db.scalar(
@@ -1858,9 +2072,7 @@ def extract_webpage(payload: WebExtractRequest) -> dict[str, object]:
 
 @app.post("/api/courses/{course_id}/resources/webpage", response_model=ResourceOut)
 def create_webpage_resource(course_id: int, payload: WebResourceCreate, db: Session = Depends(get_db)) -> ResourceOut:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    require_course(db, course_id)
 
     url = validate_public_url(payload.url)
     duplicate = db.scalar(
@@ -1891,31 +2103,37 @@ def create_webpage_resource(course_id: int, payload: WebResourceCreate, db: Sess
         document.filename = str(extracted["title"])[:255]
         document.raw_content = str(extracted["text"])
         document.progress_stage = "chunk_and_embed"
+        try:
+            rag_service.delete_document(document.id)
+        except Exception:
+            pass
+        db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         chunks = split_text_to_chunks(str(extracted["text"]))
         for index, chunk_text in enumerate(chunks):
-            db.add(
-                DocumentChunk(
-                    document_id=document.id,
-                    course_id=course_id,
-                    chunk_text=chunk_text,
-                    page_number=None,
-                    start_time=None,
-                    end_time=None,
-                    section_title=f"网页片段 {index + 1}",
-                    source_url=url,
-                    metadata_json=json.dumps(
-                        {
-                            "resource_title": document.filename,
-                            "source_type": "webpage",
-                            "source_url": url,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    token_count=len(chunk_text),
-                    chunk_index=index,
-                    embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
-                )
+            db_chunk = DocumentChunk(
+                document_id=document.id,
+                course_id=course_id,
+                chunk_text=chunk_text,
+                page_number=None,
+                start_time=None,
+                end_time=None,
+                section_title=f"网页片段 {index + 1}",
+                source_url=url,
+                metadata_json=json.dumps(
+                    {
+                        "resource_title": document.filename,
+                        "source_type": "webpage",
+                        "source_url": url,
+                    },
+                    ensure_ascii=False,
+                ),
+                token_count=len(chunk_text),
+                chunk_index=index,
+                embedding=json.dumps(make_embedding(chunk_text), ensure_ascii=False),
             )
+            db.add(db_chunk)
+            db.flush()
+            index_chunk_in_chroma(db, db_chunk)
         document.status = "ready"
         document.parse_status = "ready"
         document.progress_stage = f"completed:{len(chunks)} chunks"
@@ -1933,6 +2151,7 @@ def create_webpage_resource(course_id: int, payload: WebResourceCreate, db: Sess
 
 @app.get("/api/courses/{course_id}/resources", response_model=list[ResourceOut])
 def list_course_resources(course_id: int, db: Session = Depends(get_db)) -> list[ResourceOut]:
+    require_course(db, course_id)
     documents = db.scalars(select(Document).where(Document.course_id == course_id).order_by(Document.id.desc())).all()
     return [document_to_resource(db, document) for document in documents]
 
@@ -1954,10 +2173,12 @@ def retry_resource(resource_id: int, db: Session = Depends(get_db)) -> ResourceO
         process_pdf_document(db, document)
     elif document.file_type in {"ppt", "pptx"}:
         process_presentation_document(db, document)
+    elif document.file_type == "docx":
+        process_word_document(db, document)
     elif document.source_type == "video":
         process_video_document(db, document, document.language or "zh", False)
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF、PPT/PPTX 或视频资料")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前只支持重试 PDF、PPT/PPTX、DOCX 或视频资料")
     db.refresh(document)
     return document_to_resource(db, document)
 
@@ -1968,6 +2189,10 @@ def delete_resource(resource_id: int, db: Session = Depends(get_db)) -> dict[str
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
     deleted_file = delete_uploaded_file(document.storage_path)
+    try:
+        rag_service.delete_document(document.id)
+    except Exception:
+        pass
     db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == resource_id))
     db.delete(document)
     db.commit()
@@ -1989,7 +2214,8 @@ def ai_chat(payload: AIChatRequest, db: Session = Depends(get_db)) -> AskRespons
 
 @app.post("/api/ai/generate-summary")
 def generate_summary(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     context = get_course_context(db, payload.course_id, payload.text)
     summary = ai_service.generate_text(
         "你是课程资料整理助手。请用中文生成结构化学习摘要，包含核心概念、易错点和复习顺序。",
@@ -2000,7 +2226,8 @@ def generate_summary(payload: CourseTaskRequest, db: Session = Depends(get_db)) 
 
 @app.post("/api/ai/extract-knowledge-points")
 def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     source_document = None
     chunks: list[DocumentChunk] = []
     existing_query = select(KnowledgePoint).where(KnowledgePoint.course_id == payload.course_id)
@@ -2158,9 +2385,49 @@ def extract_knowledge_points(payload: CourseTaskRequest, db: Session = Depends(g
         "raw": result,
     }
 
+QUIZ_SECTION_PATTERN = re.compile(
+    r"(?m)(?=^\s*#{1,6}\s*(?:第\s*\d+\s*题?|题目\s*\d+|\d+\s*[.、]))"
+)
+QUIZ_QUESTION_PATTERN = re.compile(r"(?im)^\s*(?:Q|题目|问题)\s*[：:]\s*")
+QUIZ_FIELD_PATTERN = re.compile(r"(?im)^\s*(Q|题目|问题|A|答案|参考答案|E|解析|说明|讲解|检测点)\s*[：:]\s*")
+
+
+def parse_quiz_questions(result: str) -> list[tuple[str, str, str]]:
+    """Extract quiz fields without depending on blank lines from the model response."""
+    text_value = repair_mojibake(result).replace("\r\n", "\n")
+    blocks = [block.strip() for block in QUIZ_SECTION_PATTERN.split(text_value) if block.strip()]
+    if sum(bool(QUIZ_QUESTION_PATTERN.search(block)) for block in blocks) <= 1:
+        blocks = [block.strip() for block in QUIZ_QUESTION_PATTERN.split(text_value) if block.strip()]
+        blocks = [f"Q: {block}" for block in blocks]
+
+    parsed: list[tuple[str, str, str]] = []
+    for block in blocks:
+        matches = list(QUIZ_FIELD_PATTERN.finditer(block))
+        if not matches:
+            continue
+
+        fields: dict[str, str] = {}
+        for index, match in enumerate(matches):
+            field_name = match.group(1)
+            value_end = matches[index + 1].start() if index + 1 < len(matches) else len(block)
+            value = block[match.end() : value_end].strip()
+            if field_name in {"Q", "题目", "问题"}:
+                fields["question"] = value
+            elif field_name in {"A", "答案", "参考答案"}:
+                fields["answer"] = value
+            elif field_name in {"E", "解析", "说明", "讲解"}:
+                fields["explanation"] = value
+
+        question_text = fields.get("question", "")
+        if question_text:
+            parsed.append((question_text, fields.get("answer", ""), fields.get("explanation", "")))
+    return parsed
+
+
 @app.post("/api/ai/generate-quiz")
 def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     context = get_course_context(db, payload.course_id, payload.text)
     study_date = date.today().isoformat()
     daily_plan = db.scalar(
@@ -2191,12 +2458,7 @@ def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -
         ),
     )
     questions: list[Question] = []
-    blocks = [block.strip() for block in result.split("\n\n") if block.strip()]
-    for block in blocks:
-        lines = [line.strip() for line in block.splitlines() if line.strip()]
-        question_text = next((line[2:].strip() for line in lines if line.startswith("Q:")), "")
-        answer_text = next((line[2:].strip() for line in lines if line.startswith("A:")), "")
-        explanation = next((line[2:].strip() for line in lines if line.startswith("E:")), "")
+    for question_text, answer_text, explanation in parse_quiz_questions(result):
         if question_text:
             question = Question(
                 course_id=payload.course_id,
@@ -2216,18 +2478,19 @@ def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -
         "questions": [
             {
                 "id": question.id,
-                "content": question.content,
-                "correct_answer": question.correct_answer,
-                "explanation": question.explanation,
+                "content": normalize_math_delimiters(question.content or ""),
+                "correct_answer": normalize_math_delimiters(question.correct_answer or ""),
+                "explanation": normalize_math_delimiters(question.explanation or ""),
             }
             for question in questions
         ],
-        "raw": result,
+        "raw": normalize_math_delimiters(result),
     }
 
 
 @app.post("/api/ai/analyze-mistake")
 def analyze_mistake(payload: MistakeAnalyzeRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     result = ai_service.generate_text(
         "你是错题分析助手。请用中文分析错误原因、薄弱知识点、订正建议和下一步练习。",
         (
@@ -2264,9 +2527,7 @@ def analyze_mistake(payload: MistakeAnalyzeRequest, db: Session = Depends(get_db
     )
     db.add(mistake)
 
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        course.mastery = max(0, min(100, course.mastery - 5))
+    course.mastery = max(0, min(100, course.mastery - 5))
 
     db.commit()
     db.refresh(mistake)
@@ -2367,6 +2628,7 @@ def analyze_mistake_image_upload(
 def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Depends(get_db)) -> dict[str, object]:
     if not payload.question_text.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先确认或输入题目文字")
+    course = require_course(db, payload.course_id, payload.user_id)
 
     result = ai_service.generate_text(
         "你是错题图片分析助手。请用中文分析题目、解题步骤、错误原因、薄弱知识点和下一步练习建议。"
@@ -2392,9 +2654,7 @@ def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Dep
         )
         db.add(mistake)
 
-        course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
-        if course is not None:
-            course.mastery = max(0, min(100, course.mastery - 5))
+        course.mastery = max(0, min(100, course.mastery - 5))
 
         db.commit()
         db.refresh(mistake)
@@ -2405,6 +2665,7 @@ def analyze_mistake_image(payload: MistakeImageAnalyzeRequest, db: Session = Dep
 
 @app.post("/api/quiz/submit-answer")
 def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     question = db.scalar(select(Question).where(Question.id == payload.question_id, Question.course_id == payload.course_id))
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题目不存在")
@@ -2428,10 +2689,8 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
         ai_feedback=analysis,
     )
     db.add(answer_record)
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        course.mastery = max(0, min(100, course.mastery + (3 if is_correct else -5)))
-        course.progress = max(course.progress, 10)
+    course.mastery = max(0, min(100, course.mastery + (3 if is_correct else -5)))
+    course.progress = max(course.progress, 10)
     db.flush()
 
     mistake = None
@@ -2461,6 +2720,7 @@ def submit_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)
 
 @app.post("/api/quiz/evaluate-answer")
 def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     question = db.scalar(select(Question).where(Question.id == payload.question_id, Question.course_id == payload.course_id))
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题目不存在")
@@ -2491,10 +2751,8 @@ def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_d
         ai_feedback=result,
     )
     db.add(answer_record)
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        course.mastery = max(0, min(100, course.mastery + (2 if is_exact else 0)))
-        course.progress = max(course.progress, 10)
+    course.mastery = max(0, min(100, course.mastery + (2 if is_exact else 0)))
+    course.progress = max(course.progress, 10)
     db.commit()
     db.refresh(answer_record)
     return {
@@ -2509,6 +2767,7 @@ def evaluate_quiz_answer(payload: QuizSubmitRequest, db: Session = Depends(get_d
 def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     query = select(AnswerRecord, Question).join(Question, AnswerRecord.question_id == Question.id).where(AnswerRecord.user_id == user_id)
     if course_id is not None:
+        require_course(db, course_id, user_id)
         query = query.where(AnswerRecord.course_id == course_id)
     rows = db.execute(query.order_by(AnswerRecord.id.desc()).limit(50)).all()
     return [
@@ -2516,13 +2775,13 @@ def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db:
             "id": answer.id,
             "course_id": answer.course_id,
             "question_id": answer.question_id,
-            "question": question.content,
-            "student_answer": answer.student_answer,
+            "question": normalize_math_delimiters(question.content or ""),
+            "student_answer": normalize_math_delimiters(answer.student_answer or ""),
             "is_correct": answer.is_correct,
             "score": answer.score,
-            "ai_feedback": answer.ai_feedback,
-            "correct_answer": question.correct_answer,
-            "explanation": question.explanation,
+            "ai_feedback": normalize_math_delimiters(answer.ai_feedback or ""),
+            "correct_answer": normalize_math_delimiters(question.correct_answer or ""),
+            "explanation": normalize_math_delimiters(question.explanation or ""),
             "answered_at": answer.answered_at,
         }
         for answer, question in rows
@@ -2531,7 +2790,8 @@ def list_quiz_answer_records(user_id: int = 1, course_id: int | None = None, db:
 
 @app.post("/api/ai/generate-learning-plan")
 def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get_db)) -> dict[str, object]:
-    course_name = get_course_name(db, payload.course_id)
+    course = require_course(db, payload.course_id, payload.user_id)
+    course_name = course.name
     existing = db.scalar(
         select(LearningSuggestion)
         .where(
@@ -2594,7 +2854,8 @@ def generate_learning_plan(payload: CourseTaskRequest, db: Session = Depends(get
 
 
 def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str, feedback: str | None = None) -> LearningSuggestion:
-    course_name = get_course_name(db, course_id)
+    course = require_course(db, course_id, user_id)
+    course_name = course.name
     mistakes = db.scalars(
         select(MistakeRecord)
         .where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)
@@ -2655,6 +2916,7 @@ def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str,
 
 @app.post("/api/ai/daily-learning-plan")
 def get_or_create_daily_learning_plan(payload: DailyPlanRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, payload.course_id, payload.user_id)
     study_date = payload.study_date or date.today().isoformat()
     existing = db.scalar(
         select(LearningSuggestion)
@@ -2674,6 +2936,7 @@ def get_or_create_daily_learning_plan(payload: DailyPlanRequest, db: Session = D
 
 @app.post("/api/ai/update-daily-learning-plan")
 def update_daily_learning_plan(payload: LearningCheckinRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    course = require_course(db, payload.course_id, payload.user_id)
     study_date = payload.study_date or date.today().isoformat()
     checkin = LearningCheckin(
         user_id=payload.user_id,
@@ -2690,13 +2953,11 @@ def update_daily_learning_plan(payload: LearningCheckinRequest, db: Session = De
     suggestion = build_daily_plan(db, payload.user_id, payload.course_id, study_date, payload.feedback)
     checkin.plan_id = suggestion.id
 
-    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id))
-    if course is not None:
-        if payload.status == "completed":
-            course.progress = min(100, course.progress + 5)
-            course.mastery = min(100, course.mastery + 3)
-        elif payload.status == "stuck":
-            course.mastery = max(0, course.mastery - 3)
+    if payload.status == "completed":
+        course.progress = min(100, course.progress + 5)
+        course.mastery = min(100, course.mastery + 3)
+    elif payload.status == "stuck":
+        course.mastery = max(0, course.mastery - 3)
 
     db.commit()
     db.refresh(suggestion)
@@ -2713,6 +2974,7 @@ def update_daily_learning_plan(payload: LearningCheckinRequest, db: Session = De
 
 @app.get("/courses/{course_id}/knowledge-points")
 def list_course_knowledge_points(course_id: int, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id)
     points = db.scalars(select(KnowledgePoint).where(KnowledgePoint.course_id == course_id).order_by(KnowledgePoint.id)).all()
     return [
         {
@@ -2731,6 +2993,7 @@ def list_course_knowledge_points(course_id: int, db: Session = Depends(get_db)) 
 
 @app.get("/courses/{course_id}/learning-suggestions")
 def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id, user_id)
     suggestions = db.scalars(
         select(LearningSuggestion)
         .where(LearningSuggestion.course_id == course_id, LearningSuggestion.user_id == user_id)
@@ -2748,87 +3011,184 @@ def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Sessi
     ]
 
 
-@app.get("/courses/{course_id}/diagnosis")
-def get_course_diagnosis(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
-    course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+def clamp_percent(value: float) -> int:
+    return max(0, min(100, round(value)))
 
+
+def build_course_learning_snapshot(db: Session, course_id: int, user_id: int) -> dict[str, object]:
+    course = require_course(db, course_id, user_id)
     documents_count = db.scalar(select(func.count()).select_from(Document).where(Document.course_id == course_id)) or 0
-    mistakes_count = db.scalar(select(func.count()).select_from(MistakeRecord).where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)) or 0
+    knowledge_count = db.scalar(select(func.count()).select_from(KnowledgePoint).where(KnowledgePoint.course_id == course_id)) or 0
     suggestions_count = db.scalar(select(func.count()).select_from(LearningSuggestion).where(LearningSuggestion.user_id == user_id, LearningSuggestion.course_id == course_id)) or 0
-    messages_count = db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id)) or 0
+    messages_count = db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id, ChatMessage.role == "user")) or 0
+    answers = db.scalars(
+        select(AnswerRecord)
+        .where(AnswerRecord.user_id == user_id, AnswerRecord.course_id == course_id)
+        .order_by(AnswerRecord.id.desc())
+    ).all()
+    mistakes = db.scalars(
+        select(MistakeRecord)
+        .where(MistakeRecord.user_id == user_id, MistakeRecord.course_id == course_id)
+        .order_by(MistakeRecord.id.desc())
+    ).all()
     checkins = db.scalars(
         select(LearningCheckin)
         .where(LearningCheckin.user_id == user_id, LearningCheckin.course_id == course_id)
         .order_by(LearningCheckin.id.desc())
-        .limit(7)
     ).all()
-    recent_checkins = list(reversed(checkins))
+
+    answer_count = len(answers)
+    average_score = clamp_percent(sum(answer.score or 0 for answer in answers) / answer_count) if answer_count else None
+    correct_rate = clamp_percent(sum(1 for answer in answers if answer.is_correct) / answer_count * 100) if answer_count else None
+    mistakes_count = len(mistakes)
+    reviewed_mistakes = sum(1 for item in mistakes if item.review_status == "reviewed" or item.review_count > 0)
+    unresolved_mistakes = mistakes_count - reviewed_mistakes
+    review_rate = clamp_percent(reviewed_mistakes / mistakes_count * 100) if mistakes_count else None
+    checkin_count = len(checkins)
+    completed_checkins = sum(1 for item in checkins if item.status == "completed")
+    stuck_checkins = sum(1 for item in checkins if item.status == "stuck")
+    total_minutes = sum(max(0, item.minutes or 0) for item in checkins)
+    completion_rate = clamp_percent(completed_checkins / checkin_count * 100) if checkin_count else None
+    continuity = clamp_percent((completion_rate or 0) * 0.7 + min(30, total_minutes / 10)) if checkin_count else None
+
+    evidence_count = answer_count + min(checkin_count, 4) + min(mistakes_count, 3) + min(messages_count, 3)
+    if evidence_count >= 12:
+        confidence = {"level": "high", "label": "证据充分", "detail": f"已综合 {answer_count} 次作答、{checkin_count} 次打卡和 {mistakes_count} 条错题。"}
+    elif evidence_count >= 4:
+        confidence = {"level": "medium", "label": "证据有限", "detail": f"已综合 {answer_count} 次作答、{checkin_count} 次打卡和 {mistakes_count} 条错题。"}
+    else:
+        confidence = {"level": "low", "label": "样本不足", "detail": "当前记录较少，结论仅用于确定下一步学习动作。"}
+
+    recent_checkins = list(reversed(checkins[:7]))
     trend_dates = [item.study_date[5:] if len(item.study_date) >= 10 else item.study_date for item in recent_checkins]
-    trend_activity = [max(1, round(item.minutes / 20)) for item in recent_checkins]
+    trend_activity = [min(100, max(0, item.minutes or 0)) for item in recent_checkins]
     trend_mastery = []
-    running_mastery = max(0, course.mastery - len(recent_checkins) * 2)
+    running_mastery = course.mastery
     for item in recent_checkins:
         if item.status == "completed":
             running_mastery += 3
         elif item.status == "stuck":
-            running_mastery -= 2
+            running_mastery -= 3
         elif item.status == "studying":
             running_mastery += 1
-        trend_mastery.append(max(0, min(100, running_mastery)))
-
+        trend_mastery.append(clamp_percent(running_mastery))
     if not trend_dates:
-        trend_dates = ["暂无反馈"]
-        trend_activity = [0]
-        trend_mastery = [course.mastery]
+        trend_dates, trend_activity, trend_mastery = ["暂无记录"], [0], [course.mastery]
 
+    actions: list[dict[str, str]] = []
+    strengths: list[str] = []
+    if answer_count == 0:
+        actions.append({"title": "先完成一次自测", "reason": "尚无作答记录，无法判断知识掌握。", "action": "在测验中完成 5 道题，优先选择当前课程重点。", "tone": "amber"})
+    elif average_score is not None and average_score < 60:
+        actions.append({"title": "优先修复基础题", "reason": f"最近 {answer_count} 次作答平均得分为 {average_score}%。", "action": "先整理错题中的概念与公式，再完成同类题复测。", "tone": "red"})
+    elif average_score is not None and average_score >= 80:
+        strengths.append(f"近期作答平均得分 {average_score}%，基础练习表现稳定。")
+    if unresolved_mistakes:
+        actions.append({"title": "完成错题闭环", "reason": f"有 {unresolved_mistakes} 条错题尚未复盘。", "action": "逐条补充订正原因，并在复习后重新完成相似题。", "tone": "red"})
+    elif mistakes_count and review_rate == 100:
+        strengths.append("已记录的错题均有复盘痕迹，复习闭环较完整。")
+    if checkin_count == 0:
+        actions.append({"title": "记录学习反馈", "reason": "尚无学习打卡，无法判断投入和连续性。", "action": "在学习计划页完成一次反馈，填写时长和卡点。", "tone": "amber"})
+    elif continuity is not None and continuity < 50:
+        actions.append({"title": "提高学习连续性", "reason": f"已完成 {completed_checkins}/{checkin_count} 次打卡，共学习 {total_minutes} 分钟。", "action": "连续 3 天完成 20 分钟学习，并在当天提交反馈。", "tone": "amber"})
+    elif continuity is not None and continuity >= 70:
+        strengths.append(f"已完成 {completed_checkins}/{checkin_count} 次学习反馈，学习节奏较稳定。")
+    if messages_count >= 3:
+        strengths.append(f"已围绕课程提出 {messages_count} 个问题，具备主动澄清习惯。")
+    if not actions:
+        actions.append({"title": "保持当前节奏", "reason": "当前没有突出的风险信号。", "action": "继续按计划学习，并每周完成一次针对性自测。", "tone": "emerald"})
+
+    return {
+        "course": course,
+        "documents_count": documents_count,
+        "knowledge_count": knowledge_count,
+        "suggestions_count": suggestions_count,
+        "messages_count": messages_count,
+        "answer_count": answer_count,
+        "average_score": average_score,
+        "correct_rate": correct_rate,
+        "mistakes_count": mistakes_count,
+        "reviewed_mistakes": reviewed_mistakes,
+        "unresolved_mistakes": unresolved_mistakes,
+        "review_rate": review_rate,
+        "checkin_count": checkin_count,
+        "completed_checkins": completed_checkins,
+        "stuck_checkins": stuck_checkins,
+        "total_minutes": total_minutes,
+        "completion_rate": completion_rate,
+        "continuity": continuity,
+        "confidence": confidence,
+        "actions": actions[:3],
+        "strengths": strengths[:3],
+        "trend": {"dates": trend_dates, "mastery": trend_mastery, "activity": trend_activity},
+    }
+
+
+@app.get("/courses/{course_id}/diagnosis")
+def get_course_diagnosis(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
+    snapshot = build_course_learning_snapshot(db, course_id, user_id)
+    course = snapshot["course"]
+    has_mastery_evidence = bool(snapshot["answer_count"] or snapshot["mistakes_count"] or snapshot["checkin_count"])
     items = [
-        {"label": "课程进度", "value": course.progress, "status": "待开始" if course.progress <= 0 else "进行中"},
-        {"label": "掌握状态", "value": course.mastery, "status": "待诊断" if course.progress <= 0 else "已评估"},
-        {"label": "资料数量", "value": min(100, documents_count * 25), "status": f"{documents_count} 份资料"},
-        {"label": "错题风险", "value": min(100, mistakes_count * 20), "status": f"{mistakes_count} 条错题"},
-        {"label": "问答活跃度", "value": min(100, messages_count * 5), "status": f"{messages_count} 条消息"},
+        {"label": "课程掌握", "value": course.mastery if has_mastery_evidence else None, "status": f"课程当前估计 {course.mastery}%" if has_mastery_evidence else "尚无足够学习证据", "hint": "来自测验、错题和学习反馈带来的掌握度变化。", "tone": "emerald"},
+        {"label": "测验表现", "value": snapshot["average_score"], "status": f"{snapshot['answer_count']} 次作答，正确率 {snapshot['correct_rate']}%" if snapshot["answer_count"] else "尚无作答记录", "hint": "按已保存作答的得分计算。", "tone": "emerald" if (snapshot["average_score"] or 0) >= 80 else "amber"},
+        {"label": "学习连续性", "value": snapshot["continuity"], "status": f"{snapshot['completed_checkins']}/{snapshot['checkin_count']} 次完成，共 {snapshot['total_minutes']} 分钟" if snapshot["checkin_count"] else "尚无学习反馈", "hint": "综合完成率与累计学习时长。", "tone": "emerald" if (snapshot["continuity"] or 0) >= 70 else "amber"},
+        {"label": "错题闭环", "value": snapshot["review_rate"], "status": f"已复盘 {snapshot['reviewed_mistakes']}/{snapshot['mistakes_count']}，待处理 {snapshot['unresolved_mistakes']}" if snapshot["mistakes_count"] else "尚未记录错题", "hint": "以错题的复盘状态和复习次数为依据。", "tone": "emerald" if snapshot["unresolved_mistakes"] == 0 else "red"},
     ]
     return {
         "course_id": course_id,
         "course_name": course.name,
         "progress": course.progress,
         "mastery": course.mastery,
-        "documents_count": documents_count,
-        "mistakes_count": mistakes_count,
-        "suggestions_count": suggestions_count,
-        "messages_count": messages_count,
+        "documents_count": snapshot["documents_count"],
+        "knowledge_count": snapshot["knowledge_count"],
+        "mistakes_count": snapshot["mistakes_count"],
+        "messages_count": snapshot["messages_count"],
         "items": items,
-        "trend": {
-            "dates": trend_dates,
-            "mastery": trend_mastery,
-            "activity": trend_activity,
-        },
+        "confidence": snapshot["confidence"],
+        "actions": snapshot["actions"],
+        "strengths": snapshot["strengths"],
+        "trend": snapshot["trend"],
     }
 
 
 @app.get("/courses/{course_id}/profile")
 def get_course_profile(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> dict[str, object]:
-    diagnosis = get_course_diagnosis(course_id, user_id, db)
-    progress = int(diagnosis["progress"])
-    mastery = int(diagnosis["mastery"])
-    mistakes_count = int(diagnosis["mistakes_count"])
-    messages_count = int(diagnosis["messages_count"])
-    suggestions_count = int(diagnosis["suggestions_count"])
+    snapshot = build_course_learning_snapshot(db, course_id, user_id)
+    course = snapshot["course"]
+    has_mastery_evidence = bool(snapshot["answer_count"] or snapshot["mistakes_count"] or snapshot["checkin_count"])
     radar = [
-        {"name": "理解力", "value": max(20, mastery)},
-        {"name": "专注度", "value": min(100, progress + 30)},
-        {"name": "练习量", "value": min(100, mistakes_count * 18 + 20)},
-        {"name": "复盘能力", "value": min(100, suggestions_count * 25 + max(0, 60 - mistakes_count * 8))},
-        {"name": "提问质量", "value": min(100, messages_count * 8 + 35)},
+        {"name": "知识掌握", "value": course.mastery if has_mastery_evidence else None, "evidence": f"课程当前掌握度 {course.mastery}%" if has_mastery_evidence else "尚无测验、错题或学习反馈"},
+        {"name": "练习表现", "value": snapshot["average_score"], "evidence": f"{snapshot['answer_count']} 次作答" if snapshot["answer_count"] else "尚无作答样本"},
+        {"name": "学习连续性", "value": snapshot["continuity"], "evidence": f"{snapshot['completed_checkins']}/{snapshot['checkin_count']} 次完成" if snapshot["checkin_count"] else "尚无学习反馈"},
+        {"name": "错题复盘", "value": snapshot["review_rate"], "evidence": f"已复盘 {snapshot['reviewed_mistakes']}/{snapshot['mistakes_count']} 条" if snapshot["mistakes_count"] else "尚无错题样本"},
+        {"name": "主动提问", "value": min(100, snapshot["messages_count"] * 20) if snapshot["messages_count"] else None, "evidence": f"已提出 {snapshot['messages_count']} 个课程问题" if snapshot["messages_count"] else "尚无课程提问"},
     ]
-    conclusion = "当前画像来自课程进度、问答、错题和学习建议统计。完成更多测验后画像会更准确。"
-    return {"course_id": course_id, "radar": radar, "conclusion": conclusion}
+    available = [item["value"] for item in radar if item["value"] is not None]
+    average = clamp_percent(sum(available) / len(available)) if available else 0
+    conclusion = f"当前画像基于 {snapshot['answer_count']} 次作答、{snapshot['checkin_count']} 次学习反馈、{snapshot['mistakes_count']} 条错题和 {snapshot['messages_count']} 个课程问题生成。"
+    if snapshot["confidence"]["level"] == "low":
+        conclusion += " 当前样本不足，优先完成一次测验和一次学习反馈后再比较变化。"
+    elif average >= 75:
+        conclusion += " 当前学习状态较稳定，可逐步增加综合题和迁移练习。"
+    else:
+        conclusion += " 建议先处理诊断中的优先动作，再通过短测验验证改进。"
+    return {
+        "course_id": course_id,
+        "radar": radar,
+        "confidence": snapshot["confidence"],
+        "focuses": snapshot["actions"],
+        "strengths": snapshot["strengths"],
+        "conclusion": conclusion,
+    }
 
 
 @app.post("/qa/ask", response_model=AskResponse)
 def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskResponse:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或不属于当前用户")
+
     session = db.scalar(
         select(ChatSession).where(
             ChatSession.id == payload.session_id,
@@ -2890,6 +3250,7 @@ def ask_question(payload: AskRequest, db: Session = Depends(get_db)) -> AskRespo
     answer_with_references = answer + "\n\n### 核对位置\n" + "\n".join(f"- {item}" for item in references)
     assistant_message = ChatMessage(user_id=payload.user_id, course_id=payload.course_id, session_id=session.id, role="assistant", content=answer_with_references)
     db.add(assistant_message)
+    session.updated_at = datetime.now()
     db.flush()
     db.commit()
 
@@ -2909,7 +3270,7 @@ def list_chat_sessions(user_id: int = 1, course_id: int = 1, db: Session = Depen
     sessions = db.scalars(
         select(ChatSession)
         .where(ChatSession.user_id == user_id, ChatSession.course_id == course_id)
-        .order_by(ChatSession.id.desc())
+        .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
     ).all()
     return [
         ChatSessionOut(
@@ -2925,6 +3286,10 @@ def list_chat_sessions(user_id: int = 1, course_id: int = 1, db: Session = Depen
 
 @app.post("/qa/sessions", response_model=ChatSessionOut)
 def create_chat_session(payload: ChatSessionCreate, db: Session = Depends(get_db)) -> ChatSessionOut:
+    course = db.scalar(select(CourseModel).where(CourseModel.id == payload.course_id, CourseModel.user_id == payload.user_id))
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或不属于当前用户")
+
     title = (payload.title or "新对话").strip() or "新对话"
     session = ChatSession(user_id=payload.user_id, course_id=payload.course_id, title=title[:120])
     db.add(session)
@@ -2959,13 +3324,13 @@ def list_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | N
     messages = db.scalars(
         select(ChatMessage)
         .where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id, ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
     ).all()
     return [
         ChatMessageOut(
             id=message.id,
             role=message.role,
-            content=message.content,
+            content=normalize_math_delimiters(message.content or ""),
             created_at=message.created_at.isoformat() if message.created_at else "",
         )
         for message in messages
@@ -2974,6 +3339,7 @@ def list_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | N
 
 @app.get("/qa/messages/search")
 def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id, user_id)
     term = keyword.strip()
     if not term:
         return []
@@ -2992,7 +3358,7 @@ def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db:
         {
             "id": message.id,
             "role": message.role,
-            "content": message.content,
+            "content": normalize_math_delimiters(message.content or ""),
             "created_at": message.created_at.isoformat() if message.created_at else "",
             "session_id": session.id,
             "session_title": session.title,
@@ -3003,6 +3369,7 @@ def search_chat_messages(keyword: str, user_id: int = 1, course_id: int = 1, db:
 
 @app.delete("/qa/messages")
 def delete_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, course_id, user_id)
     if session_id is None:
         result = db.execute(delete(ChatMessage).where(ChatMessage.user_id == user_id, ChatMessage.course_id == course_id))
     else:
@@ -3013,6 +3380,7 @@ def delete_chat_messages(user_id: int = 1, course_id: int = 1, session_id: int |
 
 @app.post("/diagnosis/signals")
 def create_signal(payload: DiagnosisSignal, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, payload.course_id, payload.user_id)
     suggestion = LearningSuggestion(
         user_id=payload.user_id,
         course_id=payload.course_id,
@@ -3032,6 +3400,7 @@ def create_signal(payload: DiagnosisSignal, db: Session = Depends(get_db)) -> di
 
 @app.post("/mistakes")
 def create_mistake(payload: MistakeCreate, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_course(db, payload.course_id, payload.user_id)
     mistake = MistakeRecord(
         user_id=payload.user_id,
         course_id=payload.course_id,
@@ -3053,6 +3422,7 @@ def create_mistake(payload: MistakeCreate, db: Session = Depends(get_db)) -> dic
 def list_mistakes(user_id: int = 1, course_id: int | None = None, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     query = select(MistakeRecord).where(MistakeRecord.user_id == user_id)
     if course_id is not None:
+        require_course(db, course_id, user_id)
         query = query.where(MistakeRecord.course_id == course_id)
     mistakes = db.scalars(query.order_by(MistakeRecord.id.desc())).all()
     results: list[dict[str, object]] = []

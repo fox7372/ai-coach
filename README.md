@@ -1,137 +1,56 @@
 # AI Coach
 
-AI Coach 是一个面向学生的个性化异步学习平台 MVP。项目围绕“课程资料 -> 知识理解 -> 测验检测 -> 错题分析 -> 学习画像 -> 学习计划”的闭环设计，目标是帮助学生把分散资料转化为可持续复习和反馈的学习流程。
+AI Coach 是面向学生的个性化异步学习平台 MVP。它围绕“课程资料 -> 检索问答 -> 测验练习 -> 错题复盘 -> 学习诊断与画像 -> 学习计划”建立学习闭环，把课程专属资料和真实学习记录用于后续回答与建议。
 
-## 项目目的
-
-本项目用于验证生成式 AI 在学生自主学习场景中的可行性，重点解决以下问题：
-
-- 学生上传或导入课程资料后，系统可以围绕课程生成知识点、测验和学习建议。
-- 学生可以针对课程资料进行 AI 问答，并保留历史对话。
-- 学生做题或上传错题图片后，系统可以分析错误原因并加入错题库。
-- 系统根据资料、问答、测验、错题和反馈更新学习画像。
-- 学生可以通过和 AI 交互生成整体学习计划，并根据每日学习状态更新每日计划。
-
-当前版本是 MVP，适合课程设计、毕业设计原型、小范围演示和功能验证，不是面向大规模生产环境的完整 SaaS。
+当前版本适合课程设计、毕业设计原型、个人使用和小范围演示，不以高并发生产部署为目标。
 
 ## 核心功能
 
-- 用户登录/注册
-- 课程创建、课程详情和课程删除
-- PDF 上传、网页导入、视频资料导入
-- 基于课程资料的 AI 问答
-- 对话历史记录、新建对话、删除对话、关键词搜索历史对话
-- 知识点生成，支持按课程或按单份资料生成
-- 测验生成，支持直接显示答案模式和学生作答模式
-- 测验作答保存、AI 判题和加入错题本
-- 错题库管理，支持手动错题、问答回答加入错题本、错题图片识图分析或文字分析
-- 学习诊断和知识画像
+- 用户注册、登录、课程创建、编辑和删除
+- PDF、PPT/PPTX、DOCX 资料上传与批量导入；支持网页和视频资料入口
+- PDF 可选 PyMuPDF 快速解析或 Docling 结构化解析；DOCX 使用 python-docx，演示文稿使用 Docling
+- 基于课程资料的 RAG 问答，保留会话、历史记录和检索来源
+- 从课程资料生成知识点和测验，支持作答、参考答案、AI 判题和解析
+- 错题库：作答错题、手动录入、问答加入错题、图片分析与复盘状态
+- 学习诊断与学习画像：综合作答成绩、错题复盘、学习打卡、学习时长、提问和学习建议；样本不足时显示“待采样”而不是错误地显示为 0%
 - 整体学习计划、每日学习计划、学习反馈和计划更新
-- 多模型 API Key 设置，支持 OpenAI 兼容接口
+- 通过 OpenAI 兼容接口接入不同的对话大模型
 
-## 技术栈
-
-### 前端
-
-- React
-- TypeScript
-- Vite
-- Tailwind CSS
-- Axios
-- React Markdown
-- KaTeX
-- Lucide React
-
-前端目录：
-
-```text
-前端/
-```
-
-### 后端
-
-- FastAPI
-- SQLAlchemy
-- PyMySQL
-- MariaDB / MySQL 协议
-- OpenAI SDK 兼容模型接口
-- PyMuPDF
-- yt-dlp
-- Pillow / pytesseract
-
-后端目录：
-
-```text
-backend/
-```
-
-### AI 与图片处理
-
-- 文本生成：OpenAI-compatible Chat Completions，可配置 DeepSeek、OpenAI、通义千问、硅基流动或自定义服务
-- 错题图片处理：
-  - 默认尝试把图片交给当前模型分析并加入错题库
-  - 如果当前模型命中文本模型黑名单，前端提示学生切换识图模型或手动输入题目文字
-  - PaddleOCR / Tesseract OCR 相关接口保留为备用能力，不再作为默认上传流程
-- RAG 当前以课程资料切块和文本检索为主，后续可扩展到向量数据库。
-
-## 系统架构
-
-```mermaid
-flowchart TD
-    Student["学生"]
-    Frontend["React + Vite 前端"]
-    Backend["FastAPI 后端"]
-    DB["MariaDB / MySQL"]
-    Uploads["本地上传文件目录"]
-    AI["可配置大模型 API<br/>OpenAI-compatible"]
-    ImageAI["错题图片处理<br/>识图模型 / 手动文字 / OCR 备用"]
-
-    Student --> Frontend
-    Frontend --> Backend
-    Backend --> DB
-    Backend --> Uploads
-    Backend --> AI
-    Backend --> ImageAI
-
-    Backend --> Courses["课程管理"]
-    Backend --> Documents["资料解析与切块"]
-    Backend --> QA["AI 问答与历史"]
-    Backend --> Quiz["测验生成与作答"]
-    Backend --> Mistakes["错题库"]
-    Backend --> Profile["学习画像与诊断"]
-    Backend --> Plan["学习计划"]
-```
-
-## 学习闭环
+## RAG 流程
 
 ```mermaid
 flowchart LR
-    A["上传/导入课程资料"] --> B["生成知识点"]
-    B --> C["生成测验"]
-    C --> D["学生完成测验"]
-    D --> E["AI 分析错题"]
-    E --> F["更新学习画像"]
-    F --> G["生成学习计划"]
-    G --> H["学生反馈每日状态"]
-    H --> G
+    A["上传课程资料"] --> B["解析与文本切块"]
+    B --> C["Transformers Embedding"]
+    C --> D["Chroma 持久化知识库"]
+    Q["学生问题"] --> E["同模型生成问题向量"]
+    E --> F["按课程过滤并点积召回"]
+    D --> F
+    F --> G["Cross-Encoder 重排"]
+    G --> H["OpenAI 兼容大模型回答"]
+    H --> I["回答与来源片段"]
 ```
 
-## 后端接口分层
+- Embedding：默认 `BAAI/bge-small-zh-v1.5`，由 Transformers 在本机生成归一化向量。
+- 向量库：Chroma `PersistentClient`，默认目录为 `backend/chroma_db`，使用 inner-product 空间。
+- 召回：在同一课程范围内获取候选片段，并用点积重新排序，默认候选数为 30。
+- 重排：默认 `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`，保留前 5 个片段。
+- 生成：通过 OpenAI SDK 调用兼容 Chat Completions 的服务，可配置 DeepSeek、OpenAI、通义千问、硅基流动或其他兼容服务。
 
-AI 功能按任务拆分，避免所有能力都挤在一个聊天接口里：
+“OpenAI 兼容”只代表接口格式兼容，不代表模型必须来自 OpenAI。修改 `AI_BASE_URL`、`AI_API_KEY` 和 `AI_MODEL` 即可切换服务商，无需改业务代码。
 
-```text
-/api/ai/chat
-/api/ai/generate-summary
-/api/ai/generate-quiz
-/api/ai/analyze-mistake
-/api/ai/analyze-mistake-image-upload
-/api/ai/ocr-mistake-image
-/api/ai/analyze-mistake-image
-/api/ai/extract-knowledge-points
-/api/ai/generate-learning-plan
-/api/ai/update-daily-learning-plan
-```
+## 技术栈
+
+| 层级 | 技术 | 用途 |
+| --- | --- | --- |
+| 前端 | React 19、TypeScript、Vite、Tailwind CSS | 课程学习、上传、问答、测验、错题和画像界面 |
+| 前端辅助 | Axios、React Router、React Markdown、KaTeX、Lucide React | 接口调用、导航、Markdown/公式渲染和图标 |
+| 后端 | Python、FastAPI、Uvicorn、Pydantic Settings | REST API、配置和业务编排 |
+| 数据 | SQLAlchemy、PyMySQL、MariaDB/MySQL | 课程、资料、题目、对话、错题和学习记录 |
+| 知识库 | Chroma | 课程片段与 Embedding 的本地持久化检索 |
+| 本地模型 | Transformers、PyTorch | Embedding、点积召回后的交叉编码器重排，可使用 CUDA |
+| 资料处理 | PyMuPDF、Docling、python-docx、yt-dlp | PDF、演示文稿、Word 和视频资料处理 |
+| 图片备用能力 | PaddleOCR、pytesseract、Pillow | 错题图片 OCR 兜底；优先使用配置的视觉模型 |
 
 ## 目录结构
 
@@ -139,92 +58,133 @@ AI 功能按任务拆分，避免所有能力都挤在一个聊天接口里：
 .
 ├── backend/
 │   ├── app/
-│   │   ├── ai_service.py
-│   │   ├── database.py
-│   │   ├── main.py
-│   │   └── models.py
-│   ├── sql/
+│   │   ├── ai_service.py       # OpenAI 兼容模型调用与文本处理
+│   │   ├── rag_service.py      # Embedding、Chroma 召回和重排
+│   │   ├── database.py         # 数据库与 RAG 配置
+│   │   ├── main.py             # FastAPI 接口与业务流程
+│   │   └── models.py           # SQLAlchemy 数据模型
 │   ├── requirements.txt
+│   ├── requirements-gpu.txt
 │   ├── start_backend.ps1
 │   └── start_database.ps1
 ├── 前端/
-│   ├── public/
 │   ├── src/
-│   │   ├── api/
-│   │   ├── App.tsx
-│   │   ├── data.ts
-│   │   ├── index.css
-│   │   └── main.tsx
 │   ├── package.json
 │   └── vite.config.ts
 └── README.md
 ```
 
-## 本地运行
+## 部署前下载与配置
+
+部署机器需要能够访问数据库、所选大模型服务，以及 Hugging Face 模型下载源。首次导入资料或提问时，Embedding 和重排模型会自动下载；建议在上线前预热一次，避免首次用户请求等待下载。
+
+### 必需环境
+
+1. 安装 Node.js 20 或更高版本，并安装 pnpm。
+2. 安装 Python 3.11 或与项目依赖兼容的版本，并确保可以创建虚拟环境。
+3. 安装并启动 MariaDB 或 MySQL，创建项目数据库账号。
+4. 准备一个 OpenAI 兼容大模型服务的 API Key；没有 API Key 时，问答、出题和分析功能无法生成内容。
+5. 确保服务器可写入 `backend/uploads`、`backend/chroma_db` 和数据库数据目录，并把这些运行数据排除在 Git 之外。
+
+### 后端依赖下载
+
+在后端目录创建虚拟环境并安装依赖：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+这会下载 FastAPI、SQLAlchemy、PyMuPDF、Docling、Chroma、Transformers、PyTorch、PaddleOCR 等 Python 依赖。`Docling`、`PaddleOCR`、`PyTorch` 和 Transformers 模型体积较大，部署时需要预留磁盘空间和网络带宽。
+
+如需 GPU，确认 NVIDIA 驱动和 CUDA 环境与 PyTorch CUDA 轮子匹配后安装：
+
+```powershell
+pip install -r requirements-gpu.txt
+```
+
+`RAG_DEVICE=auto` 会在检测到 CUDA 时优先使用 GPU；没有可用 GPU 时自动回退到 CPU。
+
+### 本地模型预热
+
+默认会下载以下 Hugging Face 模型：
+
+```text
+BAAI/bge-small-zh-v1.5
+cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+```
+
+在受限网络环境中，应提前配置可用的 Hugging Face 镜像或把模型缓存带到部署机器。模型首次下载成功后会由 Transformers 缓存；之后服务可复用本地缓存。
+
+### 可选系统组件
+
+- 需要处理错题图片且不使用视觉模型时，安装 Tesseract OCR，并准备中文语言包 `chi_sim`；项目会在 PaddleOCR 不可用时尝试该备用路径。
+- 使用视频资料导入时，需要网络可访问对应视频平台及可用字幕；`yt-dlp` 已包含在 Python 依赖中，但部分平台可能受到访问限制。
+- 大文件解析、视频导入和 OCR 当前在后端进程内执行。正式生产部署建议增加后台任务队列、资源限制、对象存储与备份策略。
+
+## 配置环境变量
+
+复制示例配置：
+
+```powershell
+cd backend
+Copy-Item .env.example .env
+```
+
+至少配置数据库和对话模型：
+
+```env
+DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/ai_learning?charset=utf8mb4
+AI_PROVIDER=deepseek
+AI_API_KEY=your_api_key
+AI_BASE_URL=https://api.deepseek.com
+AI_MODEL=deepseek-chat
+
+CHROMA_PERSIST_DIR=backend/chroma_db
+EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+RERANKER_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+RAG_DEVICE=auto
+```
+
+其他 OpenAI 兼容服务示例：
+
+```env
+# OpenAI
+AI_BASE_URL=https://api.openai.com/v1
+AI_MODEL=gpt-4o-mini
+
+# 通义千问兼容接口
+AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AI_MODEL=qwen-plus
+
+# 硅基流动兼容接口
+AI_BASE_URL=https://api.siliconflow.cn/v1
+AI_MODEL=deepseek-ai/DeepSeek-V3
+```
+
+## 本地启动
 
 ### 1. 启动数据库
-
-在 Windows PowerShell 中进入后端目录：
 
 ```powershell
 cd backend
 powershell -ExecutionPolicy Bypass -File .\start_database.ps1
 ```
 
-### 2. 配置环境变量
-
-复制示例配置：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-根据需要填写：
-
-```env
-DATABASE_URL=mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4
-AI_PROVIDER=deepseek
-AI_API_KEY=你的_api_key
-AI_BASE_URL=https://api.deepseek.com
-AI_MODEL=deepseek-chat
-```
-
-其他 OpenAI 兼容接口示例：
-
-```env
-AI_PROVIDER=openai
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=gpt-4o-mini
-
-AI_PROVIDER=qwen
-AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-AI_MODEL=qwen-plus
-
-AI_PROVIDER=siliconflow
-AI_BASE_URL=https://api.siliconflow.cn/v1
-AI_MODEL=deepseek-ai/DeepSeek-V3
-```
-
-### 3. 启动后端
+### 2. 启动后端
 
 ```powershell
 cd backend
 powershell -ExecutionPolicy Bypass -File .\start_backend.ps1
 ```
 
-后端健康检查：
+后端健康检查：`http://127.0.0.1:8000/health`
 
-```text
-http://127.0.0.1:8000/health
-```
+接口文档：`http://127.0.0.1:8000/docs`
 
-接口文档：
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-### 4. 启动前端
+### 3. 启动前端
 
 ```powershell
 cd 前端
@@ -232,47 +192,39 @@ pnpm install
 pnpm dev
 ```
 
-默认访问：
+默认地址：`http://127.0.0.1:5173`
 
-```text
-http://127.0.0.1:5173
-```
+## 验证
 
-如果本机没有 `pnpm`，也可以使用项目已有 Node 环境后改用：
+后端测试：
 
 ```powershell
-npm install
-npm run dev
+cd backend
+pytest -q
+```
+
+前端生产构建：
+
+```powershell
+cd 前端
+pnpm build
 ```
 
 ## 数据与安全说明
 
-以下内容不应提交到 Git：
+以下运行数据和密钥不得提交到 Git：
 
 - `backend/.env`
-- `backend/.mysql-data/`
+- `backend/.mysql-data/` 与其他数据库备份目录
 - `backend/uploads/`
-- `backend/.venv/`
-- `backend/.venv-win/`
-- `前端/node_modules/`
-- `前端/dist/`
-- `前端/.env.local`
+- `backend/chroma_db/`
+- `backend/.venv/`、`backend/.venv-win/`
+- `前端/node_modules/`、`前端/dist/`、`前端/.env.local`
 
-仓库中只保留源码、配置示例和启动脚本。
+当前认证与部署方式仍以演示和本地开发为目标。公开部署前需要补充密码策略、会话或令牌鉴权、权限隔离、HTTPS、日志脱敏、备份与恢复流程。
 
-## 当前限制
+## 当前限制与后续方向
 
-- 错题图片默认交给当前模型尝试识别；命中文本模型黑名单时需要学生手动输入题目文字。
-- 视频导入依赖公开视频、字幕和 `yt-dlp` 能力，部分平台可能无法稳定获取。
-- AI 生成、识图分析、OCR、PDF 解析等慢任务当前仍是 MVP 同步流程，正式部署应改为后台任务队列。
-- 当前适合个人使用、小组测试和演示，不建议直接作为高并发生产系统。
-
-## 后续优化方向
-
-- 邮箱注册和验证码
-- 后台任务队列：Redis + Celery / RQ
-- 向量检索和更完整的 RAG 管线
-- PDF 页码、段落级来源引用
-- 更严格的权限系统和用户隔离
-- 更完善的学习计划版本管理
-- 部署脚本、Docker Compose 和 CI 检查
+- 文档和图片处理是同步 MVP 流程，大文件需要等待；可升级为 Redis + Celery/RQ 等后台任务队列。
+- 本地向量库、上传文件和数据库需要单独备份；可迁移到对象存储和托管数据库。
+- 可继续完善课程资料的页码/段落级引用、用户隔离、计划版本管理、部署脚本和 CI 检查。
