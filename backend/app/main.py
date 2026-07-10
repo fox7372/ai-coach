@@ -2478,13 +2478,13 @@ def generate_quiz(payload: QuizGenerateRequest, db: Session = Depends(get_db)) -
         "questions": [
             {
                 "id": question.id,
-                "content": repair_mojibake(question.content or ""),
-                "correct_answer": repair_mojibake(question.correct_answer or ""),
-                "explanation": repair_mojibake(question.explanation or ""),
+                "content": normalize_math_delimiters(question.content or ""),
+                "correct_answer": normalize_math_delimiters(question.correct_answer or ""),
+                "explanation": normalize_math_delimiters(question.explanation or ""),
             }
             for question in questions
         ],
-        "raw": repair_mojibake(result),
+        "raw": normalize_math_delimiters(result),
     }
 
 

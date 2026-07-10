@@ -47,6 +47,12 @@ def test_normalize_math_delimiters_supports_legacy_inline_and_block_latex():
     assert normalize_math_delimiters(result) == "行内：$\\mathbf{A}$。\\n块：$$\nc_{ij} = \\sum_{k=1}^{n} a_{ik}b_{kj}\n$$"
 
 
+def test_normalize_math_delimiters_unescapes_model_latex_commands():
+    result = r"$\\mathbf{A} \\times \\mathbf{B}$"
+
+    assert normalize_math_delimiters(result) == r"$\mathbf{A} \times \mathbf{B}$"
+
+
 def test_chat_messages_return_newest_answer_first():
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:

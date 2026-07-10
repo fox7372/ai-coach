@@ -29,7 +29,8 @@ def normalize_math_delimiters(text: str) -> str:
     """Convert legacy LaTex delimiters into the Markdown math form used by KaTeX."""
     repaired = repair_mojibake(text)
     repaired = re.sub(r"\\\[\s*([\s\S]*?)\s*\\\]", r"$$\n\1\n$$", repaired)
-    return re.sub(r"\\\(\s*([\s\S]*?)\s*\\\)", r"$\1$", repaired)
+    repaired = re.sub(r"\\\(\s*([\s\S]*?)\s*\\\)", r"$\1$", repaired)
+    return re.sub(r"\\\\(?=[A-Za-z])", r"\\", repaired)
 
 
 def model_supports_vision(model: str) -> bool:

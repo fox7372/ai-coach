@@ -5,5 +5,6 @@
 - Parse multiline quiz fields without requiring blank lines and always retain the complete generated content in the UI.
 - Added isolated SQLite tests for quiz parsing and reverse-chronological chat history.
 - Render math in chat and quiz content with KaTeX, including legacy `\\(...\\)` and `\\[...\\]` responses.
+- Normalize model double-escaped LaTex commands such as `\\\\mathbf` before rendering quiz reference answers.
 
 Validation: `pytest tests\\test_quiz_text_parsing.py -q`, frontend production build, and browser checks on the chat and quiz panels.

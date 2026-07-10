@@ -312,6 +312,7 @@ function MarkdownBlock({ children }: { children: string }) {
   const normalized = repairMojibake(children)
     .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, '$$\n$1\n$$')
     .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, '$$$1$')
+    .replace(/\\\\(?=[A-Za-z])/g, '\\')
   return <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{normalized}</ReactMarkdown>
 }
 
