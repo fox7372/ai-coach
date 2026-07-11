@@ -1,8 +1,12 @@
 # AI Coach
 
-AI Coach 是面向学生的个性化异步学习平台 MVP。它围绕“课程资料 -> 检索问答 -> 测验练习 -> 错题复盘 -> 学习诊断与画像 -> 学习计划”建立学习闭环，把课程专属资料和真实学习记录用于后续回答与建议。
+## 总体描述
 
-当前版本适合课程设计、毕业设计原型、个人使用和小范围演示，不以高并发生产部署为目标。
+AI Coach 是面向学生的课程专属知识库与学习辅导平台。学生把 PDF、PPT、Word、网页或视频资料导入课程后，系统完成解析、切块、向量索引与课程范围检索；后续 AI 问答、知识点、测验、错题复盘、学习诊断、学习画像和学习计划都基于课程资料与学习记录协同工作。
+
+系统把业务数据与向量数据分开保存：MySQL/MariaDB 记录用户、课程、资料、会话、测验、错题与学习行为；Chroma 保存文档切块的 Embedding。这使课程资料可被检索，同时学习过程可被持续分析，而不只是一次性的聊天机器人。
+
+当前版本面向课程设计、毕业设计原型、个人使用和小范围演示，不以高并发生产部署为目标。
 
 ## 核心功能
 
@@ -43,14 +47,15 @@ flowchart LR
 
 | 层级 | 技术 | 用途 |
 | --- | --- | --- |
-| 前端 | React 19、TypeScript、Vite、Tailwind CSS | 课程学习、上传、问答、测验、错题和画像界面 |
-| 前端辅助 | Axios、React Router、React Markdown、KaTeX、Lucide React | 接口调用、导航、Markdown/公式渲染和图标 |
-| 后端 | Python、FastAPI、Uvicorn、Pydantic Settings | REST API、配置和业务编排 |
-| 数据 | SQLAlchemy、PyMySQL、MariaDB/MySQL | 课程、资料、题目、对话、错题和学习记录 |
-| 知识库 | Chroma | 课程片段与 Embedding 的本地持久化检索 |
-| 本地模型 | Transformers、PyTorch | Embedding、点积召回后的交叉编码器重排，可使用 CUDA |
-| 资料处理 | PyMuPDF、Docling、python-docx、yt-dlp | PDF、演示文稿、Word 和视频资料处理 |
-| 图片备用能力 | PaddleOCR、pytesseract、Pillow | 错题图片 OCR 兜底；优先使用配置的视觉模型 |
+| 前端 | React 19、TypeScript、Vite、Tailwind CSS | 学习工作台、上传、问答、测验、错题和诊断界面 |
+| 前端能力 | Axios、React Router、React Markdown、KaTeX、Lucide React | API 访问、路由、Markdown/公式渲染和图标 |
+| 后端 | Python、FastAPI、Uvicorn、Pydantic Settings | REST API、配置、启动检查与业务编排 |
+| 业务数据 | SQLAlchemy、PyMySQL、MySQL 8.4 / MariaDB | 用户、课程、资料、会话、题目、错题和学习记录 |
+| 向量知识库 | Chroma PersistentClient | 课程文档切块、元数据与归一化 Embedding 的本地持久化检索 |
+| RAG 模型 | Transformers、PyTorch、NumPy | BGE Embedding、课程过滤、点积召回与 Cross-Encoder 重排；支持 CUDA 回退 |
+| 资料处理 | PyMuPDF、Docling、python-docx、yt-dlp | PDF、演示文稿、Word、网页和视频资料处理 |
+| 图片能力 | PaddleOCR、pytesseract、Pillow | 错题图片 OCR 兜底；可配合视觉模型分析图片 |
+| 本地运行 | Docker Compose、PowerShell | MySQL 容器、Windows 启动脚本与服务预检 |
 
 ## 目录结构
 
@@ -58,10 +63,13 @@ flowchart LR
 .
 ├── backend/
 │   ├── app/
+│   │   ├── api/routes/         # 按业务域拆分的 FastAPI 路由
+│   │   ├── services/           # 解析、索引、检索和应用服务
 │   │   ├── ai_service.py       # OpenAI 兼容模型调用与文本处理
 │   │   ├── rag_service.py      # Embedding、Chroma 召回和重排
+│   │   ├── runtime.py          # 共享运行时依赖
 │   │   ├── database.py         # 数据库与 RAG 配置
-│   │   ├── main.py             # FastAPI 接口与业务流程
+│   │   ├── main.py             # FastAPI 应用装配
 │   │   └── models.py           # SQLAlchemy 数据模型
 │   ├── requirements.txt
 │   ├── requirements-gpu.txt
@@ -69,8 +77,12 @@ flowchart LR
 │   └── start_database.ps1
 ├── 前端/
 │   ├── src/
+│   │   ├── components/         # 课程详情、上传、问答和学习面板
+│   │   └── shared/             # 类型、常量、工具和通用组件
 │   ├── package.json
 │   └── vite.config.ts
+├── docker-compose.yml
+├── start_project.ps1           # Docker 数据库、后端和前端的一键启动
 └── README.md
 ```
 
@@ -82,7 +94,7 @@ flowchart LR
 
 1. 安装 Node.js 20 或更高版本，并安装 pnpm。
 2. 安装 Python 3.11 或与项目依赖兼容的版本，并确保可以创建虚拟环境。
-3. 安装并启动 MariaDB 或 MySQL，创建项目数据库账号。
+3. 安装 Docker Desktop，或准备可连接的 MySQL/MariaDB 数据库。
 4. 准备一个 OpenAI 兼容大模型服务的 API Key；没有 API Key 时，问答、出题和分析功能无法生成内容。
 5. 确保服务器可写入 `backend/uploads`、`backend/chroma_db` 和数据库数据目录，并把这些运行数据排除在 Git 之外。
 
@@ -136,7 +148,7 @@ Copy-Item .env.example .env
 至少配置数据库和对话模型：
 
 ```env
-DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/ai_learning?charset=utf8mb4
+DATABASE_URL=mysql+pymysql://ai_coach:123456@127.0.0.1:3307/ai_learning?charset=utf8mb4
 AI_PROVIDER=deepseek
 AI_API_KEY=your_api_key
 AI_BASE_URL=https://api.deepseek.com
@@ -165,6 +177,30 @@ AI_MODEL=deepseek-ai/DeepSeek-V3
 ```
 
 ## 本地启动
+
+### 推荐：一键启动 Docker 开发环境
+
+首次使用时先复制配置并填写大模型 Key：
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+```
+
+在仓库根目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_project.ps1
+```
+
+该脚本会启动或复用 Docker Desktop 和 MySQL 容器，等待数据库可连接，再启动或复用后端与前端。它不会结束已存在的进程；若 `8000` 或 `5173` 被其他无关进程占用，会明确报错而不是强制关闭进程。
+
+默认 Docker 数据库连接为 `ai_coach:123456@127.0.0.1:3307/ai_learning`。首次部署前请同时修改根目录 Docker 环境变量 `MYSQL_PASSWORD` 与 `backend/.env` 中的 `DATABASE_URL` 密码。若使用已有 Windows 服务或远程数据库，可跳过 Docker：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_project.ps1 -SkipDatabase
+```
+
+### 手动启动
 
 ### 1. 准备环境变量
 
@@ -203,7 +239,7 @@ cd backend
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
-$env:MYSQL_PASSWORD = "your_password"
+$env:MYSQL_PASSWORD = "123456"
 $env:MYSQL_HOST_PORT = "3307"
 docker compose up -d db
 docker compose ps
