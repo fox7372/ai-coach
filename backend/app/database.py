@@ -6,7 +6,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
 class Settings(BaseSettings):
-    database_url: str = "mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4"
+    database_url: str = "mysql+pymysql://ai_coach:your_password@127.0.0.1:3306/ai_learning?charset=utf8mb4"
     ai_provider: str = "deepseek"
     ai_api_key: str | None = None
     ai_base_url: str = "https://api.deepseek.com"
@@ -33,7 +33,7 @@ if settings.deepseek_base_url:
 if settings.deepseek_model:
     settings.ai_model = settings.deepseek_model
 
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+engine = create_engine(settings.database_url, pool_pre_ping=True, pool_recycle=1800)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

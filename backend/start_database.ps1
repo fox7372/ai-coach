@@ -1,104 +1,47 @@
+﻿[CmdletBinding()]
+param(
+  [switch]$Start
+)
+
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ProjectRoot
+$DatabaseServices = @(Get-Service -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.Name -match "mysql|mariadb" -or $_.DisplayName -match "mysql|mariadb"
+  } |
+  Sort-Object Name)
 
-$MySqlBase = "C:\Program Files\MySQL\MySQL Server 8.4"
-$MySqlD = Join-Path $MySqlBase "bin\mysqld.exe"
-$MySql = Join-Path $MySqlBase "bin\mysql.exe"
-$DataDir = Join-Path $ProjectRoot ".mysql-data"
-
-function Test-DatabaseReady {
-  try {
-    & $MySql -h 127.0.0.1 -P 3306 -u root --connect-timeout=2 -e "SELECT 1;" 2>$null | Out-Null
-    return $LASTEXITCODE -eq 0
-  } catch {
-    return $false
-  }
-}
-
-function Backup-UndoFiles {
-  $UndoFiles = @("undo_001", "undo_002", "undo_1_trunc.log", "undo_2_trunc.log")
-  $ExistingUndoFiles = $UndoFiles | ForEach-Object { Join-Path $DataDir $_ } | Where-Object { Test-Path $_ }
-  if ($ExistingUndoFiles.Count -eq 0) {
-    return
-  }
-
-  $UndoBackupDir = Join-Path $DataDir ("undo-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-  New-Item -ItemType Directory -Path $UndoBackupDir | Out-Null
-  foreach ($UndoFile in $ExistingUndoFiles) {
-    Move-Item -LiteralPath $UndoFile -Destination (Join-Path $UndoBackupDir (Split-Path -Leaf $UndoFile))
-  }
-  Write-Host "Moved stale undo files to: $UndoBackupDir" -ForegroundColor Yellow
-}
-
-function Set-EnvValue {
-  param(
-    [string]$Key,
-    [string]$Value
-  )
-
-  $EnvPath = Join-Path $ProjectRoot ".env"
-  $Lines = @()
-  if (Test-Path $EnvPath) {
-    $Lines = [System.IO.File]::ReadAllLines($EnvPath, [System.Text.Encoding]::UTF8)
-  }
-
-  $Updated = $false
-  $Output = foreach ($Line in $Lines) {
-    if ($Line -match "^$([regex]::Escape($Key))=") {
-      $Updated = $true
-      "$Key=$Value"
-    } else {
-      $Line
-    }
-  }
-  if (!$Updated) {
-    $Output += "$Key=$Value"
-  }
-
-  [System.IO.File]::WriteAllLines($EnvPath, $Output, [System.Text.UTF8Encoding]::new($false))
-}
-
-if (!(Test-Path $MySqlD)) {
-  Write-Host "MySQL/MariaDB compatible server was not found at: $MySqlD" -ForegroundColor Red
+if ($DatabaseServices.Count -eq 0) {
+  Write-Host "未找到已注册的 MySQL 或 MariaDB Windows 服务。" -ForegroundColor Yellow
+  Write-Host "可选方案：" -ForegroundColor Yellow
+  Write-Host "  1. 安装并注册 MySQL/MariaDB 服务。" -ForegroundColor DarkGray
+  Write-Host "  2. 在仓库根目录执行：docker compose up -d db" -ForegroundColor DarkGray
+  Write-Host "  3. 在 backend/.env 中配置远程 MySQL 的 DATABASE_URL。" -ForegroundColor DarkGray
   exit 1
 }
 
-if (!(Test-Path $DataDir)) {
-  New-Item -ItemType Directory -Path $DataDir | Out-Null
-  & $MySqlD --initialize-insecure --basedir=$MySqlBase --datadir=$DataDir --console
-}
+Write-Host "检测到以下数据库服务：" -ForegroundColor Cyan
+$DatabaseServices | Select-Object Name, DisplayName, Status | Format-Table -AutoSize
 
-if (!(Test-DatabaseReady)) {
-  Backup-UndoFiles
-  Start-Process -FilePath $MySqlD -ArgumentList @(
-    "--basedir=`"$MySqlBase`"",
-    "--datadir=`"$DataDir`"",
-    "--innodb-undo-directory=`"$DataDir`"",
-    "--innodb-undo-tablespaces=0",
-    "--port=3306",
-    "--bind-address=127.0.0.1",
-    "--console"
-  ) -WindowStyle Hidden
-
-  $Ready = $false
-  for ($i = 0; $i -lt 30; $i++) {
-    Start-Sleep -Seconds 1
-    if (Test-DatabaseReady) {
-      $Ready = $true
-      break
+$StoppedServices = @($DatabaseServices | Where-Object { $_.Status -ne "Running" })
+if (!$Start) {
+  if ($StoppedServices.Count -gt 0) {
+    Write-Host "服务未启动。请在确认服务名称后执行：" -ForegroundColor Yellow
+    foreach ($Service in $StoppedServices) {
+      Write-Host "  .\start_database.ps1 -Start  # 启动 $($Service.Name)" -ForegroundColor DarkGray
+      Write-Host "  或 Start-Service $($Service.Name)" -ForegroundColor DarkGray
     }
+  } else {
+    Write-Host "数据库服务已在运行。" -ForegroundColor Green
   }
-
-  if (!$Ready) {
-    Write-Host "MySQL did not become query-ready on 127.0.0.1:3306. Run mysqld with --console to inspect the startup error." -ForegroundColor Red
-    exit 1
-  }
+  exit 0
 }
 
-& $MySql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS ai_learning DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;"
+foreach ($Service in $StoppedServices) {
+  Write-Host "正在启动 Windows 服务 $($Service.Name)..." -ForegroundColor Cyan
+  Start-Service -Name $Service.Name
+}
 
-Set-EnvValue -Key "DATABASE_URL" -Value "mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4"
-
-Write-Host "Database is ready at 127.0.0.1:3306, database: ai_learning" -ForegroundColor Green
+$DatabaseServices = @(Get-Service -Name $DatabaseServices.Name)
+$DatabaseServices | Select-Object Name, DisplayName, Status | Format-Table -AutoSize
+Write-Host "数据库服务启动命令已执行。后端脚本只会检查连接，不会管理数据库进程。" -ForegroundColor Green

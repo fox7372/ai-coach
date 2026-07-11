@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -55,7 +56,7 @@ class Document(Base):
     progress_stage: Mapped[str | None] = mapped_column(String(60))
     priority: Mapped[int] = mapped_column(Integer, default=3)
     error_message: Mapped[str | None] = mapped_column(Text)
-    raw_content: Mapped[str | None] = mapped_column(Text)
+    raw_content: Mapped[str | None] = mapped_column(Text().with_variant(LONGTEXT, "mysql"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
