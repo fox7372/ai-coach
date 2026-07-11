@@ -138,17 +138,29 @@ cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
 
 ## 配置环境变量
 
-复制示例配置：
+首次启动需分别复制 Docker Compose 与 FastAPI 的配置：
 
 ```powershell
-cd backend
 Copy-Item .env.example .env
+Copy-Item backend\.env.example backend\.env
 ```
 
-至少配置数据库和对话模型：
+根目录 `.env` 仅供 Docker Compose 使用，`backend/.env` 仅供 FastAPI 使用，两个文件都不会提交。必须将根目录 `.env` 中的 `MYSQL_PASSWORD` 与后端连接串中的密码保持一致；密码含 `@`、`:`、`/`、`?`、`#` 等特殊字符时，`DATABASE_URL` 中必须使用 URL 编码。
+
+根目录 `.env`：
 
 ```env
-DATABASE_URL=mysql+pymysql://ai_coach:123456@127.0.0.1:3307/ai_learning?charset=utf8mb4
+MYSQL_ROOT_PASSWORD=replace_with_a_strong_root_password
+MYSQL_DATABASE=ai_learning
+MYSQL_USER=ai_coach
+MYSQL_PASSWORD=replace_with_a_strong_database_password
+MYSQL_HOST_PORT=3307
+```
+
+`backend/.env` 至少配置数据库和对话模型：
+
+```env
+DATABASE_URL=mysql+pymysql://ai_coach:replace_with_url_encoded_password@127.0.0.1:3307/ai_learning?charset=utf8mb4
 AI_PROVIDER=deepseek
 AI_API_KEY=your_api_key
 AI_BASE_URL=https://api.deepseek.com
@@ -182,9 +194,10 @@ AI_MODEL=deepseek-ai/DeepSeek-V3
 
 ### 推荐：一键启动 Docker 开发环境
 
-首次使用时先复制配置并填写大模型 Key：
+首次使用时先复制两个配置文件并填写数据库强密码和大模型 Key：
 
 ```powershell
+Copy-Item .env.example .env
 Copy-Item backend\.env.example backend\.env
 ```
 
@@ -196,7 +209,7 @@ powershell -ExecutionPolicy Bypass -File .\start_project.ps1
 
 该脚本会启动或复用 Docker Desktop 和 MySQL 容器，等待数据库可连接，再启动或复用后端与前端。它不会结束已存在的进程；若 `8000` 或 `5173` 被其他无关进程占用，会明确报错而不是强制关闭进程。
 
-默认 Docker 数据库连接为 `ai_coach:123456@127.0.0.1:3307/ai_learning`。首次部署前请同时修改根目录 Docker 环境变量 `MYSQL_PASSWORD` 与 `backend/.env` 中的 `DATABASE_URL` 密码。若使用已有 Windows 服务或远程数据库，可跳过 Docker：
+MySQL 仅绑定宿主机 `127.0.0.1:3307`，不会暴露给局域网。根目录 `.env` 的 `MYSQL_PASSWORD` 必须与 `backend/.env` 中 `DATABASE_URL` 的 `ai_coach` 密码相同；后者出现特殊字符时必须 URL 编码。若使用已有 Windows 服务或远程数据库，可跳过 Docker：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start_project.ps1 -SkipDatabase
@@ -237,17 +250,16 @@ cd backend
 
 #### Docker Compose
 
-在仓库根目录设置数据库密码并启动数据库容器：
+在仓库根目录复制配置、填写强密码后启动数据库容器：
 
 ```powershell
-$env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
-$env:MYSQL_PASSWORD = "123456"
-$env:MYSQL_HOST_PORT = "3307"
+Copy-Item .env.example .env
+# 编辑 .env，填写 MYSQL_ROOT_PASSWORD 与 MYSQL_PASSWORD。
 docker compose up -d db
 docker compose ps
 ```
 
-Docker 默认使用宿主机 `3307` 端口，避免与已安装的 Windows MySQL 服务占用的 3306 冲突。此处的 `MYSQL_PASSWORD` 必须与 `backend/.env` 中 `DATABASE_URL` 的 `ai_coach` 密码一致；Docker 方式的连接串端口也应写为 `3307`。也可以把 `DATABASE_URL` 指向远程 MySQL 服务。
+Docker 使用宿主机 `127.0.0.1:3307`，避免与已安装的 Windows MySQL 服务占用的 3306 冲突，也不会对局域网开放端口。此处的 `MYSQL_PASSWORD` 必须与 `backend/.env` 中 `DATABASE_URL` 的 `ai_coach` 密码一致；Docker 方式的连接串端口也应写为 `3307`。也可以把 `DATABASE_URL` 指向远程 MySQL 服务。
 
 ### 3. 启动后端
 
@@ -281,6 +293,8 @@ pnpm dev
 - Windows 数据库服务：执行 `Stop-Service <实际服务名称>`。
 
 不要通过任务管理器强制结束 `mysqld.exe`，这可能损坏 InnoDB 数据。
+
+`docker compose stop db` 只停止数据库容器，不删除数据卷。不要在普通操作中执行 `docker compose down -v`，该命令会删除 MySQL 数据卷。
 
 ## 验证
 
