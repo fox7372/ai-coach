@@ -1,8 +1,22 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from app.api.routes.chat import ask_question
+from app.database import get_db
+from app.models import Document, DocumentChunk, KnowledgePoint, MasteryRecord
+from app.runtime import ai_service
+from app.schemas import AIChatRequest, AskRequest, AskResponse, CourseTaskRequest
+from app.services.application_service import require_course
+from app.services.context import build_references, get_course_context
+from app.services.knowledge_service import (
+    appears_in_chunks,
+    build_knowledge_context,
+    deduplicate_knowledge_points,
+    find_knowledge_support,
+    parse_knowledge_point_result,
+    select_knowledge_chunks,
+)
 
 router = APIRouter()
 

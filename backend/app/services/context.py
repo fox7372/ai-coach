@@ -1,5 +1,7 @@
-from app.runtime import *
-from app.schemas import *
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import CourseModel, Document, DocumentChunk
 
 def build_references(db: Session, course_id: int) -> list[str]:
     course = db.scalar(select(CourseModel).where(CourseModel.id == course_id))

@@ -1,8 +1,48 @@
-from fastapi import APIRouter
+import json
+import time
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
+from uuid import uuid4
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models import Document, DocumentChunk
+from app.rag_service import rag_service
+from app.runtime import UPLOAD_DIR
+from app.schemas import (
+    ResourceOut,
+    VideoBatchResourceCreate,
+    VideoPreviewRequest,
+    VideoResourceCreate,
+    WebExtractRequest,
+    WebResourceCreate,
+)
+from app.services.application_service import delete_uploaded_file, require_course
+from app.services.resource_service import (
+    choose_subtitle_track,
+    clean_error_message,
+    document_to_resource,
+    extract_webpage_content,
+    fetch_text_url,
+    merge_segments_to_chunks,
+    parse_subtitle_segments,
+    process_pdf_document,
+    process_presentation_document,
+    process_word_document,
+    split_text_to_chunks,
+)
+from app.services.retrieval import index_chunk_in_chroma, make_embedding
+from app.utils.url_utils import (
+    build_timestamp_url,
+    detect_video_platform,
+    format_time,
+    normalize_video_url,
+    validate_public_url,
+)
 
 router = APIRouter()
 

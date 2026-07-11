@@ -1,8 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from app.database import get_db, settings
+from app.runtime import ai_service, rag_service
+from app.schemas import AIConfigOut, AIConfigUpdate
+from app.services.application_service import remove_env_values, write_env_value
 
 router = APIRouter()
 

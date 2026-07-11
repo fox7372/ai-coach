@@ -6,7 +6,10 @@ __pycache__/
 .venv-win/
 
 # Backend runtime and legacy database data. The startup scripts do not create these database directories.
+.env
+!.env.example
 backend/.env
+!backend/.env.example
 backend/.mysql-data/
 backend/.mysql-data-backup-*/
 backend/.mysql-data-corrupt-*/

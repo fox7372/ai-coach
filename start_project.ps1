@@ -9,6 +9,7 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendRoot = Join-Path $ProjectRoot "backend"
 $FrontendRoot = Join-Path $ProjectRoot "前端"
 $BackendScript = Join-Path $BackendRoot "start_backend.ps1"
+$RootEnvPath = Join-Path $ProjectRoot ".env"
 
 function Test-HttpEndpoint {
   param(
@@ -78,9 +79,49 @@ function Wait-ForDockerDatabase {
   throw "Docker MySQL did not become ready within 90 seconds. Run 'docker compose logs db' to inspect it."
 }
 
+function Import-ProjectEnvFile {
+  param([string]$Path)
+
+  if (!(Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  foreach ($rawLine in Get-Content -LiteralPath $Path) {
+    $line = $rawLine.Trim()
+    if (!$line -or $line.StartsWith("#")) {
+      continue
+    }
+
+    if ($line -match "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$") {
+      $key = $Matches[1]
+      $value = $Matches[2]
+      if (!(Test-Path "Env:$key")) {
+        Set-Item -Path "Env:$key" -Value $value
+      }
+    }
+  }
+}
+
+function Test-RequiredDockerCredentials {
+  Import-ProjectEnvFile -Path $RootEnvPath
+
+  $missing = @()
+  foreach ($name in @("MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD")) {
+    $value = (Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue).Value
+    if ([string]::IsNullOrWhiteSpace($value) -or $value -like "replace_with_*") {
+      $missing += $name
+    }
+  }
+
+  if ($missing.Count -gt 0) {
+    throw "缺少 MYSQL_ROOT_PASSWORD 或 MYSQL_PASSWORD。请复制根目录 .env.example 为 .env，并填写强密码。"
+  }
+}
+
 Set-Location $ProjectRoot
 
 if (!$SkipDatabase) {
+  Test-RequiredDockerCredentials
   Ensure-DockerEngine
   Write-Host "Starting or reusing Docker MySQL..." -ForegroundColor Cyan
   & docker compose up -d db

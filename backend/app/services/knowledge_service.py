@@ -1,5 +1,8 @@
-from app.runtime import *
-from app.schemas import *
+import json
+import re
+
+from app.models import DocumentChunk
+from app.schemas import RecommendedResource
 from app.services.retrieval import compact_excerpt
 
 def is_academic_knowledge_point(name: str, description: str) -> bool:
