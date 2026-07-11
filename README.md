@@ -176,6 +176,8 @@ AI_BASE_URL=https://api.siliconflow.cn/v1
 AI_MODEL=deepseek-ai/DeepSeek-V3
 ```
 
+也可登录后在“设置”页面填写模型配置。提供方需兼容 OpenAI Chat Completions 接口格式。
+
 ## 本地启动
 
 ### 推荐：一键启动 Docker 开发环境
