@@ -1,6 +1,6 @@
 from docx import Document as WordDocument
 
-from app.main import extract_docx_text
+from app.services.resource_service import extract_docx_text
 
 
 def test_extract_docx_text_reads_paragraphs_and_tables(tmp_path):

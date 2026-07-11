@@ -7,10 +7,12 @@ import sys
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.main import parse_quiz_questions  # noqa: E402
+from app.api.routes.quizzes import parse_quiz_questions  # noqa: E402
 from app.ai_service import normalize_math_delimiters  # noqa: E402
 from app.database import Base, engine  # noqa: E402
-from app.main import get_course_diagnosis, get_course_profile, list_chat_messages  # noqa: E402
+from app.api.routes.chat import list_chat_messages  # noqa: E402
+from app.api.routes.learning import get_course_diagnosis, get_course_profile  # noqa: E402
+from app.services.application_service import normalize_legacy_demo_course_metrics, to_course_out  # noqa: E402
 from app.models import AnswerRecord, ChatMessage, ChatSession, CourseModel, LearningCheckin, MistakeRecord, Question, User  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
@@ -111,3 +113,23 @@ def test_diagnosis_and_profile_are_evidence_based():
     assert any(item["label"] == "测验表现" and item["value"] == 40 for item in diagnosis["items"])
     assert any(action["title"] == "优先修复基础题" for action in diagnosis["actions"])
     assert any(item["name"] == "练习表现" and item["value"] == 40 for item in profile["radar"])
+
+
+def test_legacy_demo_metrics_are_cleared_until_learning_evidence_exists():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    with Session(engine) as db:
+        user = User(id=1, username="demo", password_hash="demo")
+        db.add(user)
+        db.flush()
+        course = CourseModel(user_id=user.id, name="操作系统原理", progress=68, mastery=61)
+        db.add(course)
+        db.commit()
+
+        normalize_legacy_demo_course_metrics(db)
+        db.refresh(course)
+        response = to_course_out(db, course)
+
+    assert (course.progress, course.mastery) == (0, 0)
+    assert response.has_progress_evidence is False
+    assert response.has_mastery_evidence is False

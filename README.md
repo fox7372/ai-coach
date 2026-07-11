@@ -166,25 +166,67 @@ AI_MODEL=deepseek-ai/DeepSeek-V3
 
 ## 本地启动
 
-### 1. 启动数据库
+### 1. 准备环境变量
 
 ```powershell
 cd backend
-powershell -ExecutionPolicy Bypass -File .\start_database.ps1
+Copy-Item .env.example .env
 ```
 
-### 2. 启动后端
+编辑 `backend/.env` 中的 `DATABASE_URL` 与大模型配置。数据库密码中如有 `@`、`:`、`/`、`?`、`#` 等特殊字符，必须进行 URL 编码后再写入连接串。
+
+### 2. 单独启动数据库
+
+后端启动脚本不会启动、关闭、重启或修复数据库。请选择一种方式单独提供 MySQL/MariaDB。
+
+#### Windows MySQL/MariaDB 服务
+
+```powershell
+Get-Service *mysql*
+Get-Service *mariadb*
+Start-Service <实际服务名称>
+```
+
+也可以使用项目保留的服务状态检查脚本：
+
+```powershell
+cd backend
+.\start_database.ps1
+.\start_database.ps1 -Start
+```
+
+不带参数时它只显示已注册服务状态；只有显式传入 `-Start` 才会启动停止状态的 Windows 服务。
+
+#### Docker Compose
+
+在仓库根目录设置数据库密码并启动数据库容器：
+
+```powershell
+$env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
+$env:MYSQL_PASSWORD = "your_password"
+$env:MYSQL_HOST_PORT = "3307"
+docker compose up -d db
+docker compose ps
+```
+
+Docker 默认使用宿主机 `3307` 端口，避免与已安装的 Windows MySQL 服务占用的 3306 冲突。此处的 `MYSQL_PASSWORD` 必须与 `backend/.env` 中 `DATABASE_URL` 的 `ai_coach` 密码一致；Docker 方式的连接串端口也应写为 `3307`。也可以把 `DATABASE_URL` 指向远程 MySQL 服务。
+
+### 3. 启动后端
 
 ```powershell
 cd backend
 powershell -ExecutionPolicy Bypass -File .\start_backend.ps1
 ```
 
+启动脚本会创建或复用 `backend/.venv`，安装依赖，读取 `.env`（缺失时临时使用 `.env.example`），检查数据库连接和 8000 端口。数据库连接失败或端口被占用时会清晰报错并退出，不会自动处理数据库或结束任何进程。
+
+如果此前在 WSL/Linux 中创建过 `backend/.venv`，Windows 下会缺少 `Scripts/python.exe`。请在确认不再使用后手动删除或重命名该虚拟环境，再运行启动脚本；脚本不会自动覆盖已有虚拟环境。
+
 后端健康检查：`http://127.0.0.1:8000/health`
 
 接口文档：`http://127.0.0.1:8000/docs`
 
-### 3. 启动前端
+### 4. 启动前端
 
 ```powershell
 cd 前端
@@ -193,6 +235,14 @@ pnpm dev
 ```
 
 默认地址：`http://127.0.0.1:5173`
+
+### 5. 停止服务
+
+- 后端：在启动后端的终端中按 `Ctrl+C`。
+- Docker 数据库：在仓库根目录执行 `docker compose stop db`。
+- Windows 数据库服务：执行 `Stop-Service <实际服务名称>`。
+
+不要通过任务管理器强制结束 `mysqld.exe`，这可能损坏 InnoDB 数据。
 
 ## 验证
 
@@ -215,13 +265,17 @@ pnpm build
 以下运行数据和密钥不得提交到 Git：
 
 - `backend/.env`
-- `backend/.mysql-data/` 与其他数据库备份目录
+- `backend/.mysql-data/`、`backend/.mysql-data-backup-*/`、`backend/.mysql-data-corrupt-*/`（旧版遗留数据库目录）
 - `backend/uploads/`
 - `backend/chroma_db/`
 - `backend/.venv/`、`backend/.venv-win/`
 - `前端/node_modules/`、`前端/dist/`、`前端/.env.local`
 
 当前认证与部署方式仍以演示和本地开发为目标。公开部署前需要补充密码策略、会话或令牌鉴权、权限隔离、HTTPS、日志脱敏、备份与恢复流程。
+
+### 旧版数据库目录迁移
+
+新版本不会创建或管理 `backend/.mysql-data`。如果旧版本中已有该目录，请先完成备份；不要直接删除仍含有效数据的目录。如果数据不需要保留，确认关联的 MySQL 进程已经停止后，再由管理员手动移除旧目录。脚本不会移动 undo 文件、删除数据目录或尝试修复 InnoDB 文件。
 
 ## 当前限制与后续方向
 

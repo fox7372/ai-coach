@@ -1,40 +1,50 @@
-# AI Learning Diagnosis Backend
+# AI Coach Backend
 
-本后端不依赖 WSL，按 Windows 本机运行。
+该后端通过 `DATABASE_URL` 连接独立运行的 MySQL、MariaDB、Docker MySQL 或远程 MySQL。后端脚本不创建项目内数据库实例，也不会启动、关闭或修复数据库进程。
 
-## 1. 数据库
-
-当前机器已有 MySQL Server 8.4，项目使用 PyMySQL 连接，和 MariaDB 协议兼容。运行下面命令会在项目目录创建一个本地数据库数据目录 `.mysql-data`，并创建 `ai_learning` 数据库：
+## 配置
 
 ```powershell
-.\start_database.ps1
+Copy-Item .env.example .env
 ```
 
-它会自动写入 `.env`：
+在 `.env` 中配置数据库和 OpenAI 兼容模型。默认示例使用 `ai_coach` 用户；请替换 `your_password`。密码含 `@`、`:`、`/`、`?`、`#` 等特殊字符时需要 URL 编码。
 
-```env
-DATABASE_URL=mysql+pymysql://root@127.0.0.1:3306/ai_learning?charset=utf8mb4
-```
+## 数据库
 
-## 2. 启动后端
-
-在 Windows PowerShell 里执行：
+先使用 Windows 服务、Docker Compose 或远程数据库单独启动 MySQL/MariaDB。
 
 ```powershell
-.\start_backend.ps1
+Get-Service *mysql*
+Get-Service *mariadb*
 ```
+
+`start_database.ps1` 只用于显示已注册服务状态。需要显式启动停止状态的服务时运行：
+
+```powershell
+.\start_database.ps1 -Start
+```
+
+Docker 数据库方案位于仓库根目录：
+
+```powershell
+$env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
+$env:MYSQL_PASSWORD = "your_password"
+$env:MYSQL_HOST_PORT = "3307"
+docker compose up -d db
+```
+
+Docker 默认映射到宿主机 3307 端口，避免与本机 MySQL 的 3306 冲突。使用 Docker 时，`.env` 的 `DATABASE_URL` 也应使用 `127.0.0.1:3307`。
+
+## 启动后端
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_backend.ps1
+```
+
+脚本会创建或复用 `.venv`，安装依赖，检查数据库连接和 8000 端口。数据库未启动、连接串错误或端口被占用时，脚本会退出并给出处理提示，不会改动数据库或结束其他进程。
 
 启动成功后访问：
 
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/docs`
-
-## 3. 当前接口
-
-- `GET /health`
-- `GET /courses`
-- `POST /documents/upload`
-- `POST /qa/ask`
-- `POST /diagnosis/signals`
-- `POST /mistakes`
-- `GET /mistakes`

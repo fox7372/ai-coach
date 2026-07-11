@@ -14,8 +14,9 @@ os.environ.setdefault("CHROMA_PERSIST_DIR", "backend/.test_chroma")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import Base, engine  # noqa: E402
-from app.main import process_pdf_document  # noqa: E402
-import app.main as main  # noqa: E402
+from app.services.knowledge_service import select_knowledge_chunks  # noqa: E402
+from app.services.resource_service import mark_document_failed, process_pdf_document  # noqa: E402
+import app.services.resource_service as main  # noqa: E402
 from app.models import CourseModel, Document, DocumentChunk  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
@@ -112,3 +113,47 @@ def test_real_transformers_embedding_dimension_matches_configured_model():
     expected_dimensions = 512 if "small" in settings.embedding_model else 768
     assert len(vector) == expected_dimensions
     assert all(isinstance(value, float) for value in vector)
+
+
+def test_document_failure_recovery_rolls_back_before_saving_status():
+    with Session(engine) as db:
+        course = CourseModel(user_id=1, name="失败恢复课程")
+        db.add(course)
+        db.flush()
+        document = Document(
+            course_id=course.id,
+            filename="oversized.pdf",
+            file_type="pdf",
+            storage_path="/tmp/oversized.pdf",
+            parse_status="processing",
+            status="processing",
+        )
+        db.add(document)
+        db.commit()
+
+        mark_document_failed(db, document.id, RuntimeError("raw_content exceeds column capacity"))
+        db.refresh(document)
+
+        assert document.status == "failed"
+        assert document.parse_status == "failed"
+        assert document.progress_stage == "failed"
+        assert "raw_content" in (document.error_message or "")
+
+
+def test_knowledge_chunk_sampling_covers_document_beginning_and_end():
+    chunks = [
+        DocumentChunk(
+            document_id=1,
+            course_id=1,
+            chunk_index=index,
+            page_number=index + 2,
+            chunk_text=f"第 {index + 1} 节的有效课程内容。" * 12,
+        )
+        for index in range(120)
+    ]
+
+    selected = select_knowledge_chunks(chunks, limit=24)
+
+    assert len(selected) == 24
+    assert selected[0].chunk_index == 0
+    assert selected[-1].chunk_index == 119
