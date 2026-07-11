@@ -1,8 +1,14 @@
-from fastapi import APIRouter
+from datetime import date
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models import AnswerRecord, ChatMessage, Document, KnowledgePoint, LearningCheckin, LearningSuggestion, MistakeRecord
+from app.runtime import ai_service
+from app.schemas import CourseTaskRequest, DailyPlanRequest, LearningCheckinRequest
+from app.services.application_service import require_course
 
 router = APIRouter()
 

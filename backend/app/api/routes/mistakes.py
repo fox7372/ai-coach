@@ -1,8 +1,13 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from app.ai_service import repair_mojibake
+from app.database import get_db
+from app.models import LearningSuggestion, MistakeRecord
+from app.schemas import DiagnosisSignal, MistakeCreate
+from app.services.application_service import require_course
+from app.services.resource_service import extract_mistake_question_text
 
 router = APIRouter()
 

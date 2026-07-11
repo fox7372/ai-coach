@@ -1,6 +1,20 @@
-from app.runtime import *
-from app.schemas import *
+import html
+import json
+import re
+from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+from fastapi import HTTPException, status
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
+
+from app.ai_service import repair_mojibake
+from app.models import Document, DocumentChunk
+from app.rag_service import rag_service
+from app.schemas import ResourceOut
 from app.services.retrieval import index_chunks_in_chroma, make_embeddings
+from app.utils.url_utils import validate_public_url
 
 def clean_subtitle_text(text_value: str) -> str:
     without_tags = re.sub(r"<[^>]+>", "", text_value)

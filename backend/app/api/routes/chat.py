@@ -1,8 +1,17 @@
-from fastapi import APIRouter
+from datetime import datetime
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from app.database import get_db, settings
+from app.models import ChatMessage, ChatSession, CourseModel, Document
+from app.runtime import ai_service, normalize_math_delimiters
+from app.schemas import AskRequest, AskResponse, ChatMessageOut, ChatSessionCreate, ChatSessionOut
+from app.services.application_service import ensure_default_chat_session, require_course
+from app.services.context import build_references
+from app.services.retrieval import chunk_location_label, compact_excerpt, has_direct_text_match, retrieve_relevant_chunks
+from app.utils.url_utils import build_timestamp_url
 
 router = APIRouter()
 

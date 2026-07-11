@@ -1,8 +1,18 @@
-from fastapi import APIRouter
+import re
+from datetime import date
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.ai_service import normalize_math_delimiters, repair_mojibake
+from app.database import get_db, settings
+from app.models import AnswerRecord, CourseModel, LearningSuggestion, MistakeRecord, Question
+from app.runtime import ai_service
+from app.schemas import MistakeAnalyzeRequest, MistakeImageAnalyzeRequest, QuizGenerateRequest, QuizSubmitRequest
+from app.services.application_service import extract_text_from_image, require_course, save_mistake_image
+from app.services.context import get_course_context
+from app.services.resource_service import clean_error_message, extract_mistake_question_text
 
 router = APIRouter()
 

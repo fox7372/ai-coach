@@ -1,8 +1,38 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
-from app.runtime import *
-from app.schemas import *
-from app.services import *
+from app.database import get_db
+from app.models import (
+    AnswerRecord,
+    ChatMessage,
+    ChatSession,
+    CourseModel,
+    Document,
+    DocumentChunk,
+    KnowledgePoint,
+    LearningCheckin,
+    LearningSuggestion,
+    MasteryRecord,
+    MistakeRecord,
+    Question,
+    User,
+)
+from app.runtime import ai_service, rag_service
+from app.schemas import (
+    AuthRequest,
+    AuthResponse,
+    CourseCreate,
+    CourseOut,
+    CourseResourceRecommendRequest,
+    CourseResourceRecommendResponse,
+)
+from app.services.application_service import delete_uploaded_file, hash_password, to_course_out, to_user_out
+from app.services.knowledge_service import (
+    add_cs_diy_resource,
+    is_computer_science_course,
+    parse_recommended_resources,
+)
 
 router = APIRouter()
 
