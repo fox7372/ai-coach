@@ -1,7 +1,8 @@
 {
-  "name": "-",
+  "name": "ai-coach-frontend",
   "private": true,
   "version": "0.0.0",
+  "packageManager": "pnpm@11.11.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
