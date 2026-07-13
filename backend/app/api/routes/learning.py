@@ -235,6 +235,50 @@ def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Sessi
     ]
 
 
+@router.get("/courses/{course_id}/learning-history")
+def list_course_learning_history(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    require_course(db, course_id, user_id)
+    checkins = db.scalars(
+        select(LearningCheckin)
+        .where(
+            LearningCheckin.course_id == course_id,
+            LearningCheckin.user_id == user_id,
+            LearningCheckin.status == "completed",
+        )
+        .order_by(LearningCheckin.study_date.desc(), LearningCheckin.created_at.desc(), LearningCheckin.id.desc())
+    ).all()
+    plan_ids = {checkin.plan_id for checkin in checkins if checkin.plan_id is not None}
+    plans_by_id = {
+        plan.id: plan.content
+        for plan in db.scalars(select(LearningSuggestion).where(LearningSuggestion.id.in_(plan_ids))).all()
+    } if plan_ids else {}
+
+    history_by_date: dict[str, dict[str, object]] = {}
+    for checkin in checkins:
+        record = history_by_date.setdefault(
+            checkin.study_date,
+            {
+                "study_date": checkin.study_date,
+                "minutes": 0,
+                "difficulty": None,
+                "feedback": None,
+                "plan": None,
+                "completed_at": checkin.created_at,
+                "checkin_count": 0,
+            },
+        )
+        record["minutes"] = int(record["minutes"]) + checkin.minutes
+        record["checkin_count"] = int(record["checkin_count"]) + 1
+        if record["difficulty"] is None and checkin.difficulty:
+            record["difficulty"] = checkin.difficulty
+        if record["feedback"] is None and checkin.feedback:
+            record["feedback"] = checkin.feedback
+        if record["plan"] is None and checkin.plan_id is not None:
+            record["plan"] = plans_by_id.get(checkin.plan_id)
+
+    return list(history_by_date.values())
+
+
 def clamp_percent(value: float) -> int:
     return max(0, min(100, round(value)))
 

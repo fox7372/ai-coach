@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { http } from '../api/http'
 import { type Course } from '../data'
-import { type DetailTab, type Resource, type KnowledgePoint, type Suggestion, type Mistake, type Diagnosis, type Profile, type PlanGenerateResult, type QuizQuestion, type QuizAnswerRecord, type PlanFeedback, getErrorCode, getErrorMessage, localDateString, Panel } from '../shared'
+import { type DetailTab, type Resource, type KnowledgePoint, type Suggestion, type DailyLearningHistory, type Mistake, type Diagnosis, type Profile, type PlanGenerateResult, type QuizQuestion, type QuizAnswerRecord, type PlanFeedback, getErrorCode, getErrorMessage, localDateString, Panel } from '../shared'
 import { ResourcesPanel, KnowledgePanel } from './ResourcesPanels'
 import { PlanPanel, QuizPanel } from './PlanQuizPanels'
 import { MistakesPanel, DiagnosisPanel, ProfilePanel } from './InsightPanels'
@@ -21,6 +21,7 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
   const [resources, setResources] = useState<Resource[]>([])
   const [knowledge, setKnowledge] = useState<KnowledgePoint[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [learningHistory, setLearningHistory] = useState<DailyLearningHistory[]>([])
   const [mistakes, setMistakes] = useState<Mistake[]>([])
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -55,6 +56,7 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
         setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
         setDailyPlan(todayPlan?.content || '')
       }),
+      loadSection('历史记录', () => http.get(`/courses/${courseId}/learning-history?user_id=${userId}`), (data) => setLearningHistory(data as DailyLearningHistory[])),
       loadSection('错题库', () => http.get(`/mistakes?user_id=${userId}&course_id=${courseId}`), (data) => setMistakes(data as Mistake[])),
       loadSection('学习诊断', () => http.get(`/courses/${courseId}/diagnosis?user_id=${userId}`), (data) => setDiagnosis(data as Diagnosis)),
       loadSection('学习画像', () => http.get(`/courses/${courseId}/profile?user_id=${userId}`), (data) => setProfile(data as Profile)),
@@ -220,7 +222,7 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
         {tab === 'resources' && <ResourcesPanel courseId={activeCourse.id} resources={resources} onChanged={loadDetail} />}
         {tab === 'qa' && <QaView course={activeCourse} userId={userId} onMistakeSaved={loadDetail} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
-        {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
+        {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} history={learningHistory} knowledge={knowledge} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
         {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} answerRecords={quizAnswerRecords} loading={loading} onGenerate={generateQuiz} onAnswered={loadDetail} onMistakeSaved={loadDetail} />}
         {tab === 'mistakes' && <MistakesPanel courseId={activeCourse.id} userId={userId} mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} onSaved={loadDetail} onDelete={deleteMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}

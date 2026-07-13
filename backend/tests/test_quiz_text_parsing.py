@@ -11,9 +11,9 @@ from app.api.routes.quizzes import parse_quiz_questions  # noqa: E402
 from app.ai_service import normalize_math_delimiters  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.api.routes.chat import list_chat_messages  # noqa: E402
-from app.api.routes.learning import get_course_diagnosis, get_course_profile  # noqa: E402
+from app.api.routes.learning import get_course_diagnosis, get_course_profile, list_course_learning_history  # noqa: E402
 from app.services.application_service import normalize_legacy_demo_course_metrics, to_course_out  # noqa: E402
-from app.models import AnswerRecord, ChatMessage, ChatSession, CourseModel, LearningCheckin, MistakeRecord, Question, User  # noqa: E402
+from app.models import AnswerRecord, ChatMessage, ChatSession, CourseModel, LearningCheckin, LearningSuggestion, MistakeRecord, Question, User  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 
@@ -113,6 +113,39 @@ def test_diagnosis_and_profile_are_evidence_based():
     assert any(item["label"] == "测验表现" and item["value"] == 40 for item in diagnosis["items"])
     assert any(action["title"] == "优先修复基础题" for action in diagnosis["actions"])
     assert any(item["name"] == "练习表现" and item["value"] == 40 for item in profile["radar"])
+
+
+def test_learning_history_groups_completed_daily_checkins():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    with Session(engine) as db:
+        user = User(username="history-user", password_hash="demo")
+        db.add(user)
+        db.flush()
+        course = CourseModel(user_id=user.id, name="历史记录课程")
+        db.add(course)
+        db.flush()
+        first_plan = LearningSuggestion(user_id=user.id, course_id=course.id, title="每日学习计划 2026-07-10", content="复习矩阵乘法")
+        second_plan = LearningSuggestion(user_id=user.id, course_id=course.id, title="每日学习计划 2026-07-11", content="完成线性变换练习")
+        db.add_all([first_plan, second_plan])
+        db.flush()
+        db.add_all(
+            [
+                LearningCheckin(user_id=user.id, course_id=course.id, plan_id=first_plan.id, study_date="2026-07-10", status="completed", minutes=25, difficulty="hard", feedback="矩阵题需要继续练", created_at=datetime(2026, 7, 10, 20, 0)),
+                LearningCheckin(user_id=user.id, course_id=course.id, plan_id=second_plan.id, study_date="2026-07-11", status="completed", minutes=30, difficulty="normal", feedback="完成第一轮练习", created_at=datetime(2026, 7, 11, 19, 0)),
+                LearningCheckin(user_id=user.id, course_id=course.id, plan_id=second_plan.id, study_date="2026-07-11", status="completed", minutes=15, difficulty="easy", feedback="补做两道题", created_at=datetime(2026, 7, 11, 20, 0)),
+                LearningCheckin(user_id=user.id, course_id=course.id, plan_id=second_plan.id, study_date="2026-07-11", status="studying", minutes=10, difficulty="normal", feedback="未完成", created_at=datetime(2026, 7, 11, 18, 0)),
+            ]
+        )
+        db.commit()
+
+        history = list_course_learning_history(course.id, user.id, db)
+
+    assert [record["study_date"] for record in history] == ["2026-07-11", "2026-07-10"]
+    assert history[0]["minutes"] == 45
+    assert history[0]["checkin_count"] == 2
+    assert history[0]["feedback"] == "补做两道题"
+    assert history[0]["plan"] == "完成线性变换练习"
 
 
 def test_legacy_demo_metrics_are_cleared_until_learning_evidence_exists():

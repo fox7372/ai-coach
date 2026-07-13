@@ -34,6 +34,15 @@ export type KnowledgePoint = {
 }
 
 export type Suggestion = { id: number; title: string; content: string; status?: string }
+export type DailyLearningHistory = {
+  study_date: string
+  minutes: number
+  difficulty: PlanFeedback['difficulty'] | null
+  feedback: string | null
+  plan: string | null
+  completed_at: string
+  checkin_count: number
+}
 export type Mistake = {
   id: number
   mistake_type: string | null
