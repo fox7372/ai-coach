@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  BrainCircuit,
   Loader2,
   Plus,
   Search,
@@ -129,7 +130,7 @@ export function QaView({ course, userId, onMistakeSaved }: { course: Course | nu
 
   return (
     <div className="grid gap-5 xl:grid-cols-[300px_1fr]">
-      <Panel>
+      <Panel className="order-2 xl:order-1">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h3 className="font-semibold">对话历史</h3>
@@ -173,9 +174,11 @@ export function QaView({ course, userId, onMistakeSaved }: { course: Course | nu
         )}
       </Panel>
 
-      <Panel>
-        <h3 className="font-semibold">AI 问答</h3>
-        <p className="mt-1 text-sm text-slate-500">当前课程：{course.name}</p>
+      <Panel className="order-1 xl:order-2">
+        <div className="flex items-start gap-3 border-b border-emerald-100 pb-4">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-emerald-700 text-white"><BrainCircuit size={19} /></div>
+          <div><h3 className="font-semibold text-slate-950">AI 课程问答</h3><p className="mt-1 text-sm text-slate-500">{course.name}</p></div>
+        </div>
         {mistakeMessage && <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{mistakeMessage}</p>}
         <div className="mt-4 grid gap-3">
           {historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">正在加载历史...</div>}
@@ -200,12 +203,21 @@ export function QaView({ course, userId, onMistakeSaved }: { course: Course | nu
             </div>
             )
           })}
-          {!messages.length && !historyLoading && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">选择一个历史对话，或新建对话后开始提问。</div>}
+          {!messages.length && !historyLoading && (
+            <div className="border-y border-slate-200 py-5">
+              <p className="text-sm font-medium text-slate-700">从课程资料开始提问</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {['总结本章核心知识点', '结合资料解释一个难点', '根据薄弱点给出复习顺序'].map((prompt) => (
+                  <button key={prompt} onClick={() => setQuestion(prompt)} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-600 hover:border-emerald-300 hover:text-emerald-800">{prompt}</button>
+                ))}
+              </div>
+            </div>
+          )}
           {loading && <LoadingNotice text="AI 正在检索课程资料并生成回答..." />}
         </div>
-        <div className="mt-4 flex gap-3">
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
           <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} rows={3} className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500" placeholder="输入问题，Enter 发送" />
-          <button onClick={() => void ask()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-400">
+          <button onClick={() => void ask()} disabled={loading || !question.trim()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">
             {loading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
             {loading ? '回答中' : '发送'}
           </button>

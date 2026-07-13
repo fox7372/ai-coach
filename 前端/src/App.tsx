@@ -131,25 +131,44 @@ function App() {
 
   return (
     <main className="study-app-shell min-h-[100dvh] text-slate-900">
-      <aside className="study-sidebar sticky top-3 z-20 m-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto p-5 text-slate-900 lg:fixed lg:inset-y-4 lg:left-4 lg:m-0 lg:w-72">
+      <header className="mobile-commandbar sticky top-0 z-30 border-b border-slate-200 bg-white/96 px-3 py-2 lg:hidden">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-emerald-700 font-bold text-white">学</div>
+            <div className="min-w-0"><p className="truncate text-sm font-semibold">AI Coach</p><p className="truncate text-xs text-slate-500">{selectedCourse?.name || '学习工作台'}</p></div>
+          </div>
+          <button onClick={() => setUser(null)} className="secondary-action grid h-9 w-9 place-items-center rounded-md" title="退出登录"><LogOut size={16} /></button>
+        </div>
+        <nav className="mt-2 grid grid-cols-4 gap-1" aria-label="移动端主导航">
+          {[
+            ['courses', '课程', <BookOpen size={16} />],
+            ['detail', '学习', <Layers3 size={16} />],
+            ['upload', '导入', <FileUp size={16} />],
+            ['settings', '设置', <Settings size={16} />],
+          ].map(([view, label, icon]) => (
+            <button key={view as string} onClick={() => setMainView(view as MainView)} className={`flex min-h-10 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium ${mainView === view ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{icon}{label}</button>
+          ))}
+        </nav>
+      </header>
+      <aside className="study-sidebar fixed inset-y-4 left-4 z-20 hidden w-72 overflow-y-auto p-5 text-slate-900 lg:block">
         <div className="flex items-center gap-3">
-          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-500 font-bold text-white shadow-lg shadow-emerald-900/20">学</div>
+          <div className="grid h-11 w-11 place-items-center rounded-md bg-emerald-700 font-bold text-white">学</div>
           <div>
-            <p className="font-semibold tracking-wide">我的学习空间</p>
-            <p className="text-xs text-slate-500">AI Learning MVP</p>
+            <p className="font-semibold">AI Coach</p>
+            <p className="text-xs text-slate-500">课程学习工作台</p>
           </div>
         </div>
-        <div className="mt-6 rounded-3xl border border-emerald-100 bg-white/78 p-4 shadow-sm">
-          <p className="text-xs font-semibold text-emerald-700">今日入口</p>
-          <p className="mt-2 text-sm leading-6 text-slate-600">选一门课，继续看资料、问 AI、做测验和整理错题。</p>
+        <div className="mt-6 border-l-2 border-emerald-600 pl-3">
+          <p className="text-xs font-semibold text-emerald-700">当前课程</p>
+          <p className="mt-1 truncate text-sm font-medium text-slate-800">{selectedCourse?.name || '尚未选择课程'}</p>
         </div>
         <nav className="mt-6 grid gap-2">
           <SideButton active={mainView === 'courses'} icon={<BookOpen size={18} />} label="课程" onClick={() => setMainView('courses')} />
-          <div className={`rounded-3xl ${mainView === 'detail' ? 'bg-emerald-50/80 p-1' : ''}`}>
+          <div>
             <SideButton active={mainView === 'detail'} icon={<Layers3 size={18} />} label="课程详情" onClick={() => setMainView('detail')} />
             <div className="ml-6 mt-2 grid gap-1 border-l border-emerald-100 pb-2 pl-3">
               {courses.map((course) => (
-                <button key={course.id} onClick={() => openCourse(course.id)} className={`rounded-2xl px-3 py-2 text-left text-sm ${selectedCourse?.id === course.id && mainView === 'detail' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:bg-white hover:text-emerald-700'}`}>
+                <button key={course.id} onClick={() => openCourse(course.id)} className={`rounded-md px-3 py-2 text-left text-sm ${selectedCourse?.id === course.id && mainView === 'detail' ? 'bg-emerald-50 font-medium text-emerald-800' : 'text-slate-600 hover:bg-slate-50 hover:text-emerald-700'}`}>
                   {course.name}
                 </button>
               ))}
@@ -159,7 +178,7 @@ function App() {
           <SideButton active={mainView === 'upload'} icon={<FileUp size={18} />} label="上传/导入" onClick={() => setMainView('upload')} />
           <SideButton active={mainView === 'settings'} icon={<Settings size={18} />} label="设置" onClick={() => setMainView('settings')} />
         </nav>
-        <div className="mt-8 rounded-3xl border border-emerald-100 bg-emerald-50/72 p-4">
+        <div className="mt-8 border-t border-slate-200 pt-4">
           <p className="text-xs text-slate-500">当前学生</p>
           <p className="mt-1 font-semibold">{user.nickname || user.username}</p>
           <div className="mt-4 grid gap-2 text-xs text-slate-600">
@@ -169,30 +188,30 @@ function App() {
         </div>
       </aside>
       <section className="min-h-[100dvh] lg:ml-[312px]">
-        <header className="px-4 pt-2 lg:px-8 lg:pt-6">
-          <div className="learning-hero mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 p-5">
+        <header className="hidden px-4 pt-2 lg:block lg:px-8 lg:pt-6">
+          <div className="workspace-header mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 py-4">
             <div>
               <p className="section-kicker">今天的学习空间</p>
               <h1 className="balanced-text mt-1 text-2xl font-semibold text-slate-950">{selectedCourse?.name || '先选一门课开始'}</h1>
               <p className="mt-1 text-sm text-slate-600">课程、资料、问答、计划、测验和错题都在这里串起来。</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <div className="hidden gap-5 rounded-2xl border border-emerald-100 bg-white/78 px-4 py-2 text-sm text-slate-600 shadow-sm lg:flex">
+              <div className="hidden gap-5 border-r border-slate-200 pr-4 text-sm text-slate-600 lg:flex">
                 <div><span className="text-slate-400">课程</span><span className="ml-2 font-semibold text-slate-950">{courses.length}</span></div>
                 <div><span className="text-slate-400">当前</span><span className="ml-2 font-semibold text-slate-950">{selectedCourse?.name || '未选择'}</span></div>
               </div>
-              <button onClick={() => setMainView('upload')} className="primary-action inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold">
+              <button onClick={() => setMainView('upload')} className="primary-action inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold">
                 <FileUp size={16} />
                 加资料
               </button>
-              <button onClick={() => setUser(null)} className="secondary-action inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm">
+              <button onClick={() => setUser(null)} className="secondary-action inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm">
                 <LogOut size={16} />
                 退出
               </button>
             </div>
           </div>
         </header>
-        <div className="mx-auto max-w-[1440px] px-4 py-6 lg:px-8">
+        <div id="main-content" className="mx-auto max-w-[1440px] px-3 py-4 sm:px-4 lg:px-8 lg:py-6">
           {mainView === 'courses' && <CoursesView courses={courses} onOpen={openCourse} onDelete={deleteCourse} />}
       {mainView === 'detail' && <CourseDetailView key={selectedCourse?.id ?? 'empty'} course={selectedCourse} userId={user.id} />}
           {mainView === 'upload' && <UploadView userId={user.id} courses={courses} onCoursesChanged={loadCourses} />}

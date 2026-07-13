@@ -5,6 +5,19 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'react-vendor', test: /node_modules\/(react|react-dom)\// },
+            { name: 'charts-vendor', test: /node_modules\/recharts\// },
+            { name: 'markdown-vendor', test: /node_modules\/(react-markdown|remark-|rehype-|katex)\// },
+          ],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/backend-api': {

@@ -173,21 +173,21 @@ export function PlanPanel({
           <div className="flex items-center gap-2"><Sparkles size={18} className="text-emerald-600" /><h3 className="font-semibold">AI 学习规划</h3></div>
           <p className="mt-1 text-sm text-slate-500">根据课程资料、错题和学习反馈生成下一步安排。</p>
         </div>
-        <button onClick={() => void onGenerate()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400"><Sparkles size={16} />AI 生成计划</button>
+        <button onClick={() => void onGenerate()} disabled={loading} className="primary-action inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold disabled:bg-slate-400"><Sparkles size={16} />AI 生成计划</button>
       </div>
 
-      <div className="mt-5 flex flex-wrap gap-2 border-y border-emerald-100 bg-emerald-50/70 py-3">
-        <button onClick={() => setPlanView('overall')} className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-white"><MessageSquareText size={16} />调整整体计划</button>
-        <button onClick={() => setPlanView('today')} className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-white"><CalendarCheck2 size={16} />记录今日反馈</button>
-        <button onClick={() => setPlanView('analytics')} className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-white"><BarChart3 size={16} />查看学习洞察</button>
+      <div className="mt-5 grid border-y border-emerald-100 bg-emerald-50 sm:grid-cols-3">
+        <button aria-pressed={planView === 'overall'} onClick={() => setPlanView('overall')} className={`inline-flex items-center gap-2 px-3 py-3 text-sm font-medium ${planView === 'overall' ? 'bg-white text-emerald-900' : 'text-emerald-800 hover:bg-white/70'}`}><MessageSquareText size={16} />调整整体计划</button>
+        <button aria-pressed={planView === 'today'} onClick={() => setPlanView('today')} className={`inline-flex items-center gap-2 border-t border-emerald-100 px-3 py-3 text-sm font-medium sm:border-t-0 sm:border-l ${planView === 'today' ? 'bg-white text-emerald-900' : 'text-emerald-800 hover:bg-white/70'}`}><CalendarCheck2 size={16} />记录今日反馈</button>
+        <button aria-pressed={planView === 'analytics'} onClick={() => setPlanView('analytics')} className={`inline-flex items-center gap-2 border-t border-emerald-100 px-3 py-3 text-sm font-medium sm:border-t-0 sm:border-l ${planView === 'analytics' ? 'bg-white text-emerald-900' : 'text-emerald-800 hover:bg-white/70'}`}><BarChart3 size={16} />查看学习洞察</button>
       </div>
 
-      <div className="mt-5 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+      <div className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
         {planViews.map(([key, label]) => (
           <button
             key={key}
             onClick={() => setPlanView(key)}
-            className={`rounded-md px-3 py-2 text-sm font-medium ${planView === key ? 'bg-emerald-600 text-white' : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+            className={`border-b-2 px-3 py-2.5 text-sm font-medium ${planView === key ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}
           >
             {label}
           </button>
