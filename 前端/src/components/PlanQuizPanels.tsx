@@ -1,15 +1,115 @@
 import ReactMarkdown from 'react-markdown'
 import { useState } from 'react'
 import {
+  BarChart3,
+  CalendarCheck2,
   Loader2,
+  MessageSquareText,
+  Sparkles,
 } from 'lucide-react'
 import { http } from '../api/http'
-import { type Suggestion, type PlanGenerateResult, type QuizQuestion, type QuizAnswerRecord, type PlanFeedback, getErrorMessage, repairMojibake, Panel, LoadingNotice, MarkdownBlock } from '../shared'
+import { type Suggestion, type DailyLearningHistory, type KnowledgePoint, type PlanGenerateResult, type QuizQuestion, type QuizAnswerRecord, type PlanFeedback, getErrorMessage, repairMojibake, Panel, LoadingNotice, MarkdownBlock } from '../shared'
+
+function toLocalDateString(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function buildStudyTimeSeries(history: DailyLearningHistory[]) {
+  const minutesByDate = new Map(history.map((record) => [record.study_date, record.minutes]))
+  const today = new Date()
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today)
+    date.setDate(today.getDate() - 6 + index)
+    const studyDate = toLocalDateString(date)
+    return {
+      studyDate,
+      label: `${date.getMonth() + 1}/${date.getDate()}`,
+      minutes: minutesByDate.get(studyDate) || 0,
+    }
+  })
+}
+
+function buildKnowledgeKeywords(knowledge: KnowledgePoint[], history: DailyLearningHistory[]) {
+  const activityText = history.map((record) => `${record.feedback || ''}\n${record.plan || ''}`).join('\n').toLocaleLowerCase()
+  return knowledge
+    .filter((point) => point.name.trim())
+    .map((point) => {
+      const name = point.name.trim()
+      const occurrences = activityText.split(name.toLocaleLowerCase()).length - 1
+      return { name, weight: 4 + occurrences * 3 }
+    })
+    .sort((left, right) => right.weight - left.weight || left.name.localeCompare(right.name, 'zh-CN'))
+    .slice(0, 18)
+}
+
+function LearningAnalytics({ history, knowledge }: { history: DailyLearningHistory[]; knowledge: KnowledgePoint[] }) {
+  const series = buildStudyTimeSeries(history)
+  const maxMinutes = Math.max(...series.map((item) => item.minutes), 1)
+  const totalMinutes = series.reduce((total, item) => total + item.minutes, 0)
+  const activeDays = series.filter((item) => item.minutes > 0).length
+  const keywords = buildKnowledgeKeywords(knowledge, history)
+  const maxWeight = Math.max(...keywords.map((item) => item.weight), 1)
+
+  return (
+    <div className="grid gap-8 xl:grid-cols-[1.05fr_0.95fr]">
+      <section className="border-b border-slate-200 pb-8 xl:border-r xl:border-b-0 xl:pr-8 xl:pb-0">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><BarChart3 size={17} className="text-emerald-600" />近 7 日学习时长</div>
+            <p className="mt-1 text-sm text-slate-500">仅统计已完成的每日学习记录。</p>
+          </div>
+          <div className="text-right text-sm text-slate-600"><strong className="text-xl text-slate-900">{totalMinutes}</strong> 分钟<br /><span className="text-xs text-slate-400">{activeDays} 个学习日</span></div>
+        </div>
+        <div className="mt-5 grid h-44 grid-cols-7 items-end gap-2 border-b border-slate-200 px-1">
+          {series.map((item) => {
+            const height = item.minutes ? `${Math.max(10, Math.round((item.minutes / maxMinutes) * 100))}%` : '2px'
+            return (
+              <div key={item.studyDate} className="flex h-full min-w-0 flex-col items-center justify-end gap-2">
+                <span className="text-xs font-medium text-slate-500">{item.minutes || ''}</span>
+                <div className="w-full max-w-10 rounded-t-sm bg-emerald-500 transition-[height] duration-300" style={{ height }} title={`${item.studyDate}: ${item.minutes} 分钟`} />
+                <span className="whitespace-nowrap text-[11px] text-slate-400">{item.label}</span>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      <section>
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Sparkles size={17} className="text-emerald-600" />知识点关键词云</div>
+        <p className="mt-1 text-sm text-slate-500">课程知识点会因在完成反馈和当日计划中被提及而提高权重。</p>
+        {keywords.length ? (
+          <div className="mt-5 flex min-h-44 flex-wrap content-center items-center justify-center gap-x-4 gap-y-3 border-y border-slate-100 py-5 text-center">
+            {keywords.map((keyword) => (
+              <span
+                key={keyword.name}
+                className="break-words font-semibold leading-tight text-slate-700"
+                style={{
+                  color: keyword.weight === maxWeight ? '#047857' : keyword.weight > 4 ? '#0f766e' : '#475569',
+                  fontSize: `${14 + Math.round((keyword.weight / maxWeight) * 13)}px`,
+                }}
+                title={`权重 ${keyword.weight}`}
+              >
+                {keyword.name}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-8 text-sm text-slate-500">生成课程知识点后，这里会显示学习重点。</p>
+        )}
+      </section>
+    </div>
+  )
+}
 
 export function PlanPanel({
   overallPlan,
   dailyPlan,
   suggestions,
+  history,
+  knowledge,
   loading,
   onGenerate,
   onFeedback,
@@ -17,11 +117,13 @@ export function PlanPanel({
   overallPlan: string
   dailyPlan: string
   suggestions: Suggestion[]
+  history: DailyLearningHistory[]
+  knowledge: KnowledgePoint[]
   loading: boolean
   onGenerate: (text?: string) => Promise<PlanGenerateResult | null>
   onFeedback: (payload: PlanFeedback) => Promise<void>
 }) {
-  const [planView, setPlanView] = useState<'overall' | 'today' | 'history'>('overall')
+  const [planView, setPlanView] = useState<'overall' | 'today' | 'analytics' | 'history'>('overall')
   const [goalText, setGoalText] = useState('')
   const [planDialog, setPlanDialog] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([])
   const [planEditing, setPlanEditing] = useState(false)
@@ -33,7 +135,8 @@ export function PlanPanel({
   const planViews: Array<[typeof planView, string]> = [
     ['overall', '整体计划'],
     ['today', '今日计划'],
-    ['history', '历史计划'],
+    ['analytics', '学习洞察'],
+    ['history', '历史记录'],
   ]
 
   async function submitOverallPlan() {
@@ -67,10 +170,16 @@ export function PlanPanel({
     <Panel>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="font-semibold">个性化学习计划</h3>
-          <p className="mt-1 text-sm text-slate-500">计划和对应修改入口放在一起，查看时可以直接调整。</p>
+          <div className="flex items-center gap-2"><Sparkles size={18} className="text-emerald-600" /><h3 className="font-semibold">AI 学习规划</h3></div>
+          <p className="mt-1 text-sm text-slate-500">根据课程资料、错题和学习反馈生成下一步安排。</p>
         </div>
-        <button onClick={() => void onGenerate()} disabled={loading} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400">快速生成</button>
+        <button onClick={() => void onGenerate()} disabled={loading} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400"><Sparkles size={16} />AI 生成计划</button>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2 border-y border-emerald-100 bg-emerald-50/70 py-3">
+        <button onClick={() => setPlanView('overall')} className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-white"><MessageSquareText size={16} />调整整体计划</button>
+        <button onClick={() => setPlanView('today')} className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-white"><CalendarCheck2 size={16} />记录今日反馈</button>
+        <button onClick={() => setPlanView('analytics')} className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-white"><BarChart3 size={16} />查看学习洞察</button>
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
@@ -171,20 +280,30 @@ export function PlanPanel({
           </div>
         )}
 
+        {planView === 'analytics' && <LearningAnalytics history={history} knowledge={knowledge} />}
+
         {planView === 'history' && (
           <div className="grid gap-3">
-            {suggestions.map((item) => (
-              <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            {history.map((record) => (
+              <div key={record.study_date} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-semibold text-slate-800">{item.title}</p>
-                  {item.status && <span className="rounded-md bg-white px-2 py-1 text-xs text-slate-500">{item.status}</span>}
+                  <p className="font-semibold text-slate-800">{record.study_date}</p>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-md bg-emerald-100 px-2 py-1 font-medium text-emerald-800">已完成</span>
+                    <span className="rounded-md bg-white px-2 py-1 text-slate-500">{record.minutes} 分钟</span>
+                    {record.difficulty && <span className="rounded-md bg-white px-2 py-1 text-slate-500">{record.difficulty === 'easy' ? '偏简单' : record.difficulty === 'hard' ? '偏难' : '适中'}</span>}
+                  </div>
                 </div>
-                <div className="markdown-answer mt-3">
-                  <ReactMarkdown>{item.content}</ReactMarkdown>
-                </div>
+                {record.feedback && <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-600">{record.feedback}</p>}
+                {record.plan && (
+                  <details className="mt-3 rounded-md bg-white px-3 py-2 text-sm text-slate-600">
+                    <summary className="cursor-pointer font-medium text-slate-700">当日计划</summary>
+                    <div className="markdown-answer mt-3"><ReactMarkdown>{record.plan}</ReactMarkdown></div>
+                  </details>
+                )}
               </div>
             ))}
-            {!suggestions.length && <p className="text-sm text-slate-500">暂无历史计划。</p>}
+            {!history.length && <p className="text-sm text-slate-500">暂无已完成的每日学习记录。</p>}
           </div>
         )}
       </div>

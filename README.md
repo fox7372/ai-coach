@@ -50,7 +50,7 @@ flowchart LR
 | 前端 | React 19、TypeScript、Vite、Tailwind CSS | 学习工作台、上传、问答、测验、错题和诊断界面 |
 | 前端能力 | Axios、React Router、React Markdown、KaTeX、Lucide React | API 访问、路由、Markdown/公式渲染和图标 |
 | 后端 | Python、FastAPI、Uvicorn、Pydantic Settings | REST API、配置、启动检查与业务编排 |
-| 业务数据 | SQLAlchemy、PyMySQL、MySQL 8.4 / MariaDB | 用户、课程、资料、会话、题目、错题和学习记录 |
+| 业务数据 | SQLAlchemy 2.0 ORM、PyMySQL 驱动、MySQL 8.4 | SQLAlchemy 负责数据模型与查询，PyMySQL 仅负责 MySQL 协议连接；Docker 默认运行 MySQL 8.4，亦可连接兼容的 MariaDB |
 | 向量知识库 | Chroma PersistentClient | 课程文档切块、元数据与归一化 Embedding 的本地持久化检索 |
 | RAG 模型 | Transformers、PyTorch、NumPy | BGE Embedding、课程过滤、点积召回与 Cross-Encoder 重排；支持 CUDA 回退 |
 | 资料处理 | PyMuPDF、Docling、python-docx、yt-dlp | PDF、演示文稿、Word、网页和视频资料处理 |
