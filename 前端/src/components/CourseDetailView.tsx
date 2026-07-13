@@ -192,7 +192,7 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
 
   return (
     <div>
-      <div className="learning-hero overflow-hidden p-6">
+      <div className="learning-hero overflow-hidden p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="section-kicker">课程详情</p>
@@ -201,22 +201,27 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
           </div>
           {notice && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{notice}</p>}
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
-          <button onClick={() => setTab('resources')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">资料</p><p className="mt-1 text-xl font-semibold text-slate-950">{resources.length}</p></button>
-          <button onClick={() => setTab('knowledge')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">知识点</p><p className="mt-1 text-xl font-semibold text-slate-950">{knowledge.length}</p></button>
-          <button onClick={() => setTab('mistakes')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">错题</p><p className="mt-1 text-xl font-semibold text-slate-950">{mistakes.length}</p></button>
-          <button onClick={() => setTab('quiz')} className="rounded-2xl border border-emerald-100 bg-white/76 p-3 text-left hover:border-emerald-300"><p className="text-xs text-slate-500">作答</p><p className="mt-1 text-xl font-semibold text-slate-950">{quizAnswerRecords.length}</p></button>
-          <div className="rounded-2xl border border-emerald-100 bg-white/76 p-3"><p className="text-xs text-slate-500">进度</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.has_progress_evidence ? `${activeCourse.progress}%` : '待开始'}</p></div>
-          <div className="rounded-2xl border border-emerald-100 bg-white/76 p-3"><p className="text-xs text-slate-500">掌握</p><p className="mt-1 text-xl font-semibold text-slate-950">{activeCourse.has_mastery_evidence ? `${activeCourse.mastery}%` : '待评估'}</p></div>
+        <section className="ai-tool-rail mt-6" aria-label="AI 学习工具">
+          <button onClick={() => setTab('qa')} className="ai-tool-button"><MessageSquare size={18} /><span><strong>AI 问答</strong><small>基于课程知识库</small></span></button>
+          <button onClick={() => setTab('plan')} className="ai-tool-button"><BrainCircuit size={18} /><span><strong>AI 学习计划</strong><small>整体计划与每日反馈</small></span></button>
+          <button onClick={() => setTab('knowledge')} className="ai-tool-button"><Target size={18} /><span><strong>AI 知识提取</strong><small>{knowledge.length} 个知识点</small></span></button>
+        </section>
+        <div className="course-stat-strip mt-5 grid grid-cols-3 sm:grid-cols-6">
+          <button onClick={() => setTab('resources')}><span>资料</span><strong>{resources.length}</strong></button>
+          <button onClick={() => setTab('knowledge')}><span>知识点</span><strong>{knowledge.length}</strong></button>
+          <button onClick={() => setTab('mistakes')}><span>错题</span><strong>{mistakes.length}</strong></button>
+          <button onClick={() => setTab('quiz')}><span>作答</span><strong>{quizAnswerRecords.length}</strong></button>
+          <div><span>进度</span><strong>{activeCourse.has_progress_evidence ? `${activeCourse.progress}%` : '待开始'}</strong></div>
+          <div><span>掌握</span><strong>{activeCourse.has_mastery_evidence ? `${activeCourse.mastery}%` : '待评估'}</strong></div>
         </div>
       </div>
-      <div className="tab-strip mt-5 flex gap-2 overflow-x-auto rounded-3xl border border-emerald-100 bg-white/76 p-2 shadow-sm">
+      <nav className="tab-strip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200 bg-white px-1" aria-label="课程功能">
         {tabs.map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)} className={`shrink-0 rounded-2xl px-3 py-2 text-sm font-medium ${tab === key ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-900/15' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}>
+          <button key={key} onClick={() => setTab(key)} className={`shrink-0 border-b-2 px-3 py-3 text-sm font-medium ${tab === key ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}>
             {label}
           </button>
         ))}
-      </div>
+      </nav>
       <div className="mt-5">
         {tab === 'overview' && <Overview course={activeCourse} resources={resources} knowledge={knowledge} mistakes={mistakes} suggestions={suggestions} />}
         {tab === 'resources' && <ResourcesPanel courseId={activeCourse.id} resources={resources} onChanged={loadDetail} />}

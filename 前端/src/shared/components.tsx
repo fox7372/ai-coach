@@ -6,12 +6,12 @@ import { Layers3, Loader2 } from 'lucide-react'
 import { repairMojibake } from './utils'
 
 export function Panel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <section className={`panel-surface p-5 ${className}`}>{children}</section>
+  return <section className={`panel-surface p-4 sm:p-5 ${className}`}>{children}</section>
 }
 
 export function LoadingNotice({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50/85 px-4 py-3 text-sm text-emerald-800">
+    <div className="flex items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
       <span className="relative flex h-5 w-5 items-center justify-center">
         <span className="absolute h-5 w-5 animate-ping rounded-full bg-emerald-300 opacity-40" />
         <Loader2 className="relative animate-spin" size={18} />

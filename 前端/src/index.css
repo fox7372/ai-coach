@@ -8,13 +8,8 @@
 body {
   margin: 0;
   min-width: 320px;
-  font-family:
-    "Microsoft YaHei UI", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    sans-serif;
-  background:
-    radial-gradient(circle at top left, rgb(16 185 129 / 0.10), transparent 28rem),
-    radial-gradient(circle at 82% 4%, rgb(15 23 42 / 0.08), transparent 24rem),
-    linear-gradient(180deg, #f8fafc 0%, #eef4f1 100%);
+  font-family: "Aptos", "Noto Sans SC", "Microsoft YaHei UI", ui-sans-serif, system-ui, sans-serif;
+  background: #f4f7f5;
   color: #13201b;
   font-variant-numeric: tabular-nums;
   text-rendering: optimizeLegibility;
@@ -78,41 +73,35 @@ select:focus-visible {
 .app-shell,
 .study-app-shell {
   min-height: 100dvh;
-  background:
-    linear-gradient(135deg, rgb(255 255 255 / 0.72), rgb(236 253 245 / 0.52)),
-    #f7faf8;
+  background: #f4f7f5;
 }
 
 .study-app-shell {
-  background:
-    radial-gradient(circle at 10% 8%, rgb(16 185 129 / 0.16), transparent 24rem),
-    radial-gradient(circle at 82% 10%, rgb(250 204 21 / 0.18), transparent 24rem),
-    radial-gradient(circle at 76% 84%, rgb(56 189 248 / 0.10), transparent 26rem),
-    linear-gradient(180deg, #fbfefb 0%, #eef8f2 100%);
+  background: #f4f7f5;
 }
 
 .panel-surface {
   border: 1px solid var(--study-border);
-  border-radius: 16px;
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.96), rgb(248 250 252 / 0.94));
-  box-shadow: 0 20px 60px rgb(15 23 42 / 0.06);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgb(15 23 42 / 0.045);
 }
 
 .soft-card {
   border: 1px solid var(--study-border);
-  border-radius: 14px;
-  background: var(--study-soft);
+  border-radius: 6px;
+  background: #f8faf9;
 }
 
 .primary-action {
   background: #047857;
   color: #ffffff;
-  box-shadow: 0 12px 28px rgb(4 120 87 / 0.18);
+  box-shadow: 0 4px 12px rgb(4 120 87 / 0.14);
 }
 
 .primary-action:hover {
   background: #065f46;
+  transform: translateY(-1px);
 }
 
 .secondary-action {
@@ -145,29 +134,24 @@ select:focus-visible {
 }
 
 .study-sidebar {
-  border: 1px solid rgb(209 250 229 / 0.88);
-  border-radius: 28px;
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.94), rgb(240 253 244 / 0.84));
-  box-shadow: 0 24px 80px rgb(15 23 42 / 0.08);
-  backdrop-filter: blur(18px);
+  border: 1px solid rgb(203 213 225 / 0.8);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 40px rgb(15 23 42 / 0.055);
 }
 
 .learning-hero {
-  border: 1px solid rgb(187 247 208 / 0.92);
-  border-radius: 28px;
-  background:
-    linear-gradient(135deg, rgb(236 253 245 / 0.94), rgb(255 251 235 / 0.76)),
-    rgb(255 255 255 / 0.86);
-  box-shadow: 0 24px 80px rgb(15 23 42 / 0.07);
+  border: 1px solid rgb(203 213 225 / 0.78);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgb(15 23 42 / 0.045);
 }
 
 .lesson-card {
-  border: 1px solid rgb(209 250 229 / 0.78);
-  border-radius: 22px;
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.96), rgb(247 254 231 / 0.42));
-  box-shadow: 0 18px 58px rgb(15 23 42 / 0.06);
+  border: 1px solid rgb(203 213 225 / 0.78);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgb(15 23 42 / 0.04);
 }
 
 .friendly-chip {
@@ -183,11 +167,9 @@ select:focus-visible {
 
 .workspace-band {
   border: 1px solid rgb(203 213 225 / 0.72);
-  border-radius: 22px;
-  background:
-    linear-gradient(135deg, rgb(255 255 255 / 0.96), rgb(236 253 245 / 0.60)),
-    var(--study-surface);
-  box-shadow: 0 24px 80px rgb(15 23 42 / 0.07);
+  border-radius: 8px;
+  background: var(--study-surface);
+  box-shadow: 0 8px 28px rgb(15 23 42 / 0.045);
 }
 
 .section-kicker {
@@ -203,9 +185,117 @@ select:focus-visible {
 
 .content-rail {
   border: 1px solid rgb(203 213 225 / 0.64);
-  border-radius: 18px;
+  border-radius: 8px;
   background: rgb(255 255 255 / 0.74);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.86);
+}
+
+.workspace-header {
+  border-bottom: 1px solid rgb(203 213 225 / 0.78);
+}
+
+.mobile-commandbar {
+  box-shadow: 0 6px 20px rgb(15 23 42 / 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.ai-tool-rail {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgb(167 243 208 / 0.9);
+  border-radius: 8px;
+  background: #ecfdf5;
+}
+
+.ai-tool-button {
+  display: flex;
+  min-height: 4.25rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  text-align: left;
+  color: #065f46;
+}
+
+.ai-tool-button + .ai-tool-button {
+  border-top: 1px solid rgb(167 243 208 / 0.85);
+}
+
+.ai-tool-button:hover {
+  background: #ffffff;
+}
+
+.ai-tool-button strong,
+.ai-tool-button small {
+  display: block;
+}
+
+.ai-tool-button strong {
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.ai-tool-button small {
+  margin-top: 0.15rem;
+  color: #5b6f67;
+  font-size: 0.75rem;
+}
+
+.course-stat-strip {
+  overflow: hidden;
+  border-block: 1px solid rgb(226 232 240);
+}
+
+.course-stat-strip > * {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.course-stat-strip > *:not(:nth-child(3n + 1)) {
+  border-left: 1px solid rgb(226 232 240);
+}
+
+.course-stat-strip span {
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.course-stat-strip strong {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 1.05rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.course-stat-strip button:hover {
+  background: #f0fdf4;
+}
+
+@media (max-width: 639px) {
+  .course-stat-strip > *:nth-child(n + 4) {
+    border-top: 1px solid rgb(226 232 240);
+  }
+}
+
+@media (min-width: 640px) {
+  .ai-tool-rail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ai-tool-button + .ai-tool-button {
+    border-top: 0;
+    border-left: 1px solid rgb(167 243 208 / 0.85);
+  }
+
+  .course-stat-strip > *:not(:first-child) {
+    border-left: 1px solid rgb(226 232 240);
+  }
 }
 
 .tab-strip {
