@@ -40,8 +40,19 @@ export type DailyLearningHistory = {
   difficulty: PlanFeedback['difficulty'] | null
   feedback: string | null
   plan: string | null
-  completed_at: string
+  plan_status: string | null
+  planned_at: string | null
+  completed_at: string | null
   checkin_count: number
+  latest_status: PlanFeedback['status']
+  feedbacks: Array<{
+    id: number
+    status: PlanFeedback['status']
+    minutes: number
+    difficulty: PlanFeedback['difficulty'] | null
+    feedback: string | null
+    created_at: string
+  }>
 }
 export type Mistake = {
   id: number

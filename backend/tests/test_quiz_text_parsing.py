@@ -11,7 +11,8 @@ from app.api.routes.quizzes import parse_quiz_questions  # noqa: E402
 from app.ai_service import normalize_math_delimiters  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.api.routes.chat import list_chat_messages  # noqa: E402
-from app.api.routes.learning import get_course_diagnosis, get_course_profile, list_course_learning_history  # noqa: E402
+from app.api.routes import learning as learning_routes  # noqa: E402
+from app.api.routes.learning import build_daily_plan, get_course_diagnosis, get_course_profile, list_course_learning_history  # noqa: E402
 from app.services.application_service import normalize_legacy_demo_course_metrics, to_course_out  # noqa: E402
 from app.models import AnswerRecord, ChatMessage, ChatSession, CourseModel, LearningCheckin, LearningSuggestion, MistakeRecord, Question, User  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
@@ -115,7 +116,7 @@ def test_diagnosis_and_profile_are_evidence_based():
     assert any(item["name"] == "练习表现" and item["value"] == 40 for item in profile["radar"])
 
 
-def test_learning_history_groups_completed_daily_checkins():
+def test_learning_history_groups_plans_and_all_daily_feedback():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
@@ -142,10 +143,80 @@ def test_learning_history_groups_completed_daily_checkins():
         history = list_course_learning_history(course.id, user.id, db)
 
     assert [record["study_date"] for record in history] == ["2026-07-11", "2026-07-10"]
-    assert history[0]["minutes"] == 45
-    assert history[0]["checkin_count"] == 2
+    assert history[0]["minutes"] == 55
+    assert history[0]["checkin_count"] == 3
     assert history[0]["feedback"] == "补做两道题"
     assert history[0]["plan"] == "完成线性变换练习"
+    assert history[0]["latest_status"] == "completed"
+    assert [item["feedback"] for item in history[0]["feedbacks"]] == ["补做两道题", "完成第一轮练习", "未完成"]
+
+
+def test_daily_plan_continues_previous_date_plan(monkeypatch):
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    prompts: list[str] = []
+
+    def fake_generate_text(_system_prompt: str, user_prompt: str) -> str:
+        prompts.append(user_prompt)
+        return "承接昨日任务并完成今日练习"
+
+    monkeypatch.setattr(learning_routes.ai_service, "generate_text", fake_generate_text)
+    with Session(engine) as db:
+        user = User(username="daily-plan-user", password_hash="demo")
+        db.add(user)
+        db.flush()
+        course = CourseModel(user_id=user.id, name="日期计划课程")
+        db.add(course)
+        db.flush()
+        db.add_all(
+            [
+                LearningSuggestion(user_id=user.id, course_id=course.id, title="整体学习计划", content="两周完成课程"),
+                LearningSuggestion(user_id=user.id, course_id=course.id, title="每日学习计划 2026-07-14", content="完成第一章并留下两道练习"),
+                LearningCheckin(user_id=user.id, course_id=course.id, study_date="2026-07-14", status="stuck", minutes=30, difficulty="hard", feedback="两道练习没有做完"),
+            ]
+        )
+        db.flush()
+
+        plan = build_daily_plan(db, user.id, course.id, "2026-07-15")
+
+    assert plan.title == "每日学习计划 2026-07-15"
+    assert plan.content == "承接昨日任务并完成今日练习"
+    assert "完成第一章并留下两道练习" in prompts[0]
+    assert "两道练习没有做完" in prompts[0]
+
+
+def test_daily_plan_feedback_adjusts_current_date_plan(monkeypatch):
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    prompts: list[str] = []
+
+    monkeypatch.setattr(
+        learning_routes.ai_service,
+        "generate_text",
+        lambda _system_prompt, user_prompt: prompts.append(user_prompt) or "减少任务后继续学习",
+    )
+    with Session(engine) as db:
+        user = User(username="daily-feedback-user", password_hash="demo")
+        db.add(user)
+        db.flush()
+        course = CourseModel(user_id=user.id, name="反馈调整课程")
+        db.add(course)
+        db.flush()
+        current = LearningSuggestion(
+            user_id=user.id,
+            course_id=course.id,
+            title="每日学习计划 2026-07-15",
+            content="先完成三道进程调度题",
+        )
+        db.add(current)
+        db.flush()
+
+        adjusted = build_daily_plan(db, user.id, course.id, "2026-07-15", "时间不足，只完成了一道")
+
+    assert adjusted.id == current.id
+    assert adjusted.content == "减少任务后继续学习"
+    assert "先完成三道进程调度题" in prompts[0]
+    assert "时间不足，只完成了一道" in prompts[0]
 
 
 def test_legacy_demo_metrics_are_cleared_until_learning_evidence_exists():
