@@ -1,8 +1,10 @@
 import ReactMarkdown from 'react-markdown'
 import { useState } from 'react'
 import {
+  ArrowDown,
   BarChart3,
   CalendarCheck2,
+  Clock3,
   Loader2,
   MessageSquareText,
   Sparkles,
@@ -15,6 +17,25 @@ function toLocalDateString(value: Date) {
   const month = String(value.getMonth() + 1).padStart(2, '0')
   const day = String(value.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function formatStudyDate(value: string) {
+  const [year, month, day] = value.split('-')
+  return year && month && day ? `${year}年${Number(month)}月${Number(day)}日` : value
+}
+
+function statusLabel(status: PlanFeedback['status']) {
+  return {
+    not_started: '未开始',
+    studying: '学习中',
+    completed: '已完成',
+    stuck: '遇到困难',
+  }[status]
+}
+
+function difficultyLabel(difficulty: PlanFeedback['difficulty'] | null) {
+  if (!difficulty) return null
+  return { easy: '偏简单', normal: '适中', hard: '偏难' }[difficulty]
 }
 
 function buildStudyTimeSeries(history: DailyLearningHistory[]) {
@@ -112,6 +133,7 @@ export function PlanPanel({
   knowledge,
   loading,
   onGenerate,
+  onGenerateDaily,
   onFeedback,
 }: {
   overallPlan: string
@@ -121,6 +143,7 @@ export function PlanPanel({
   knowledge: KnowledgePoint[]
   loading: boolean
   onGenerate: (text?: string) => Promise<PlanGenerateResult | null>
+  onGenerateDaily: () => Promise<void>
   onFeedback: (payload: PlanFeedback) => Promise<void>
 }) {
   const [planView, setPlanView] = useState<'overall' | 'today' | 'analytics' | 'history'>('overall')
@@ -131,6 +154,7 @@ export function PlanPanel({
   const [minutes, setMinutes] = useState(30)
   const [status, setStatus] = useState<PlanFeedback['status']>('studying')
   const [difficulty, setDifficulty] = useState<PlanFeedback['difficulty']>('normal')
+  const today = toLocalDateString(new Date())
   const overallContent = overallPlan || suggestions.find((item) => !item.title.startsWith('每日学习计划'))?.content || ''
   const planViews: Array<[typeof planView, string]> = [
     ['overall', '整体计划'],
@@ -235,16 +259,28 @@ export function PlanPanel({
           <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
             <div>
               <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-700">今日计划</h4>
-                <span className="text-xs text-slate-400">每日反馈后更新</span>
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-700">今日计划 · {formatStudyDate(today)}</h4>
+                  <p className="mt-1 text-xs text-slate-500">承接前一日任务，并根据最近反馈调整</p>
+                </div>
+                <span className="text-xs text-slate-400">反馈后持续更新</span>
               </div>
               <div className="markdown-answer mt-2 rounded-lg bg-slate-50 p-4">
-                <ReactMarkdown>{dailyPlan || '暂无今日计划。'}</ReactMarkdown>
+                {dailyPlan ? (
+                  <ReactMarkdown>{dailyPlan}</ReactMarkdown>
+                ) : (
+                  <div className="py-5 text-center">
+                    <CalendarCheck2 className="mx-auto text-emerald-600" size={24} />
+                    <p className="mt-2 text-sm font-medium text-slate-700">今天还没有独立计划</p>
+                    <p className="mt-1 text-xs text-slate-500">系统会读取整体计划、前一日计划和最近反馈后生成。</p>
+                    <button onClick={() => void onGenerateDaily()} disabled={loading} className="primary-action mt-4 inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold disabled:bg-slate-400"><Sparkles size={15} />生成今日计划</button>
+                  </div>
+                )}
               </div>
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <h4 className="font-semibold">今日学习反馈</h4>
-              <p className="mt-1 text-sm text-slate-500">把今天的学习状态告诉 AI，它会直接更新左侧今日计划。</p>
+              <p className="mt-1 text-sm text-slate-500">每次反馈都会成为今天继续调整、明天承接计划的依据。</p>
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <label className="text-sm text-slate-600">
                   状态
@@ -275,7 +311,8 @@ export function PlanPanel({
                 className="mt-3 w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500"
                 placeholder="例如：今天看完第一节，但矩阵乘法例题还是不会，想明天多练 3 道基础题。"
               />
-              <button onClick={() => void submitFeedback()} disabled={loading || !feedback.trim()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}根据反馈更新今日计划</button>
+              <button onClick={() => void submitFeedback()} disabled={loading || !dailyPlan || !feedback.trim()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400">{loading && <Loader2 className="animate-spin" size={16} />}记录反馈并调整计划</button>
+              {!dailyPlan && <p className="mt-2 text-xs text-amber-700">请先生成今天的计划，再提交学习反馈。</p>}
             </div>
           </div>
         )}
@@ -283,27 +320,55 @@ export function PlanPanel({
         {planView === 'analytics' && <LearningAnalytics history={history} knowledge={knowledge} />}
 
         {planView === 'history' && (
-          <div className="grid gap-3">
-            {history.map((record) => (
-              <div key={record.study_date} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-semibold text-slate-800">{record.study_date}</p>
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    <span className="rounded-md bg-emerald-100 px-2 py-1 font-medium text-emerald-800">已完成</span>
-                    <span className="rounded-md bg-white px-2 py-1 text-slate-500">{record.minutes} 分钟</span>
-                    {record.difficulty && <span className="rounded-md bg-white px-2 py-1 text-slate-500">{record.difficulty === 'easy' ? '偏简单' : record.difficulty === 'hard' ? '偏难' : '适中'}</span>}
-                  </div>
-                </div>
-                {record.feedback && <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-600">{record.feedback}</p>}
-                {record.plan && (
-                  <details className="mt-3 rounded-md bg-white px-3 py-2 text-sm text-slate-600">
-                    <summary className="cursor-pointer font-medium text-slate-700">当日计划</summary>
-                    <div className="markdown-answer mt-3"><ReactMarkdown>{record.plan}</ReactMarkdown></div>
-                  </details>
-                )}
+          <div>
+            <div className="mb-5 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <div>
+                <h4 className="font-semibold text-slate-800">按日期查看计划与反馈</h4>
+                <p className="mt-1 text-sm text-slate-500">每一天都是上一日计划的延续，反馈按发生时间保留。</p>
               </div>
-            ))}
-            {!history.length && <p className="text-sm text-slate-500">暂无已完成的每日学习记录。</p>}
+              <span className="text-xs text-slate-400">共 {history.length} 个计划日</span>
+            </div>
+            <div className="relative grid gap-0 before:absolute before:top-3 before:bottom-3 before:left-[7px] before:w-px before:bg-slate-200">
+              {history.map((record, index) => (
+                <article key={record.study_date} className="relative grid grid-cols-[16px_minmax(0,1fr)] gap-4 pb-7 last:pb-0">
+                  <span className={`relative z-10 mt-2 h-4 w-4 rounded-full border-4 border-white ${record.study_date === today ? 'bg-emerald-600' : 'bg-slate-300'}`} />
+                  <div className="min-w-0 border-b border-slate-200 pb-6">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-semibold text-slate-900">{formatStudyDate(record.study_date)}{record.study_date === today && <span className="ml-2 text-xs font-medium text-emerald-700">今天</span>}</p>
+                        <p className="mt-1 text-xs text-slate-500">{index < history.length - 1 ? `由 ${formatStudyDate(history[index + 1].study_date)} 的计划和反馈延续` : '计划时间线起点'}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span className="font-medium text-slate-700">{statusLabel(record.latest_status)}</span>
+                        <span>{record.minutes} 分钟</span>
+                        <span>{record.checkin_count} 次反馈</span>
+                      </div>
+                    </div>
+
+                    <details className="mt-4 border-l-2 border-emerald-200 pl-4 text-sm" open={record.study_date === today}>
+                      <summary className="cursor-pointer font-medium text-slate-700">当日计划</summary>
+                      <div className="markdown-answer mt-3 text-slate-600"><ReactMarkdown>{record.plan || '该日期尚未生成计划。'}</ReactMarkdown></div>
+                    </details>
+
+                    <div className="mt-4 grid gap-2">
+                      {record.feedbacks.map((item) => (
+                        <div key={item.id} className="grid gap-2 bg-slate-50 px-3 py-3 sm:grid-cols-[110px_minmax(0,1fr)]">
+                          <div className="text-xs text-slate-500">
+                            <p className="flex items-center gap-1 font-medium text-slate-700"><Clock3 size={13} />{new Date(item.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</p>
+                            <p className="mt-1">{statusLabel(item.status)} · {item.minutes} 分钟</p>
+                            {item.difficulty && <p className="mt-1">{difficultyLabel(item.difficulty)}</p>}
+                          </div>
+                          <p className="whitespace-pre-wrap text-sm leading-6 text-slate-600">{item.feedback || '未填写文字反馈'}</p>
+                        </div>
+                      ))}
+                      {!record.feedbacks.length && <p className="bg-slate-50 px-3 py-3 text-sm text-slate-500">已有该日计划，尚未记录学习反馈。</p>}
+                    </div>
+                    {index < history.length - 1 && <p className="mt-4 flex items-center gap-2 text-xs text-slate-400"><ArrowDown size={13} />反馈将参与下一日期计划的调整</p>}
+                  </div>
+                </article>
+              ))}
+            </div>
+            {!history.length && <p className="text-sm text-slate-500">暂无每日计划。生成今日计划后，会从今天开始建立日期时间线。</p>}
           </div>
         )}
       </div>

@@ -51,7 +51,7 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
       loadSection('学习计划', () => http.get(`/courses/${courseId}/learning-suggestions?user_id=${userId}`), (data) => {
         const suggestionItems = data as Suggestion[]
         const todayTitle = `每日学习计划 ${localDateString()}`
-        const todayPlan = suggestionItems.find((item) => item.title === todayTitle) || suggestionItems.find((item) => item.title.startsWith('每日学习计划'))
+        const todayPlan = suggestionItems.find((item) => item.title === todayTitle)
         setSuggestions(suggestionItems)
         setOverallPlan(suggestionItems.find((item) => !item.title.startsWith('每日学习计划'))?.content || '')
         setDailyPlan(todayPlan?.content || '')
@@ -124,6 +124,24 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
       await loadDetail()
     } catch (error: unknown) {
       setNotice(getErrorMessage(error, '今日学习计划更新失败，请稍后再试。'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function generateDailyPlan() {
+    setLoading(true)
+    try {
+      const result = (await http.post('/api/ai/daily-learning-plan', {
+        user_id: userId,
+        course_id: activeCourse.id,
+        study_date: localDateString(),
+      }, { timeout: 300000 })) as unknown as { plan: string }
+      setDailyPlan(result.plan)
+      setNotice('今日计划已根据整体计划、前一日计划和最近反馈生成。')
+      await loadDetail()
+    } catch (error: unknown) {
+      setNotice(getErrorMessage(error, '今日学习计划生成失败，请稍后再试。'))
     } finally {
       setLoading(false)
     }
@@ -227,7 +245,7 @@ export function CourseDetailView({ course, userId }: { course: Course | null; us
         {tab === 'resources' && <ResourcesPanel courseId={activeCourse.id} resources={resources} onChanged={loadDetail} />}
         {tab === 'qa' && <QaView course={activeCourse} userId={userId} onMistakeSaved={loadDetail} />}
         {tab === 'knowledge' && <KnowledgePanel items={knowledge} loading={loading} onGenerate={generateCourseKnowledge} />}
-        {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} history={learningHistory} knowledge={knowledge} loading={loading} onGenerate={generatePlan} onFeedback={updatePlanWithFeedback} />}
+        {tab === 'plan' && <PlanPanel overallPlan={overallPlan} dailyPlan={dailyPlan} suggestions={suggestions} history={learningHistory} knowledge={knowledge} loading={loading} onGenerate={generatePlan} onGenerateDaily={generateDailyPlan} onFeedback={updatePlanWithFeedback} />}
         {tab === 'quiz' && <QuizPanel courseId={activeCourse.id} userId={userId} courseName={activeCourse.name} raw={quizRaw} questions={quizQuestions} answerRecords={quizAnswerRecords} loading={loading} onGenerate={generateQuiz} onAnswered={loadDetail} onMistakeSaved={loadDetail} />}
         {tab === 'mistakes' && <MistakesPanel courseId={activeCourse.id} userId={userId} mistakes={mistakes} value={manualMistake} onChange={setManualMistake} onSave={saveMistake} onSaved={loadDetail} onDelete={deleteMistake} loading={loading} />}
         {tab === 'diagnosis' && <DiagnosisPanel diagnosis={diagnosis} />}

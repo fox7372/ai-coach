@@ -103,14 +103,15 @@ def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str,
         )
         .order_by(LearningSuggestion.id.desc())
     )
-    extra_feedback = feedback or "今天还没有新的反馈。"
-    plan = ai_service.generate_text(
-        "你是每日学习计划助手。请基于整体学习计划和学生最新状态生成今天的学习计划。今日计划必须服务于整体计划。输出包含：今日目标、学习任务、练习任务、复盘提醒、明日调整依据。",
-        (
-            f"日期：{study_date}\n课程：{course_name}\n"
-            f"当前整体学习计划：\n{overall.content if overall else '暂无整体学习计划。'}\n\n"
-            f"最新反馈：{extra_feedback}\n最近学习状态：\n{checkin_context}\n最近错题：\n{mistake_context}"
-        ),
+    previous_daily = db.scalar(
+        select(LearningSuggestion)
+        .where(
+            LearningSuggestion.user_id == user_id,
+            LearningSuggestion.course_id == course_id,
+            LearningSuggestion.title.like("每日学习计划 %"),
+            LearningSuggestion.title < f"每日学习计划 {study_date}",
+        )
+        .order_by(LearningSuggestion.title.desc(), LearningSuggestion.id.desc())
     )
     existing = db.scalar(
         select(LearningSuggestion)
@@ -120,6 +121,21 @@ def build_daily_plan(db: Session, user_id: int, course_id: int, study_date: str,
             LearningSuggestion.title == f"每日学习计划 {study_date}",
         )
         .order_by(LearningSuggestion.id.desc())
+    )
+    extra_feedback = feedback or "今天还没有新的反馈。"
+    plan = ai_service.generate_text(
+        (
+            "你是每日学习计划助手。请生成指定日期的学习计划。今日计划必须服务于整体计划，并且是上一日期计划的延续："
+            "先承接未完成任务，再根据最新反馈调整任务数量、难度和顺序，避免每天从头重新规划。"
+            "输出包含：与前一日的衔接、今日目标、学习任务、练习任务、复盘提醒、下一日调整依据。"
+        ),
+        (
+            f"日期：{study_date}\n课程：{course_name}\n"
+            f"当前整体学习计划：\n{overall.content if overall else '暂无整体学习计划。'}\n\n"
+            f"上一日期计划：\n{previous_daily.content if previous_daily else '这是首个每日计划，请从整体计划的第一阶段开始。'}\n\n"
+            f"调整前的本日计划：\n{existing.content if existing else '本日尚未生成计划。'}\n\n"
+            f"最新反馈：{extra_feedback}\n最近学习状态：\n{checkin_context}\n最近错题：\n{mistake_context}"
+        ),
     )
     if existing is not None:
         existing.content = plan
@@ -238,22 +254,46 @@ def list_course_learning_suggestions(course_id: int, user_id: int = 1, db: Sessi
 @router.get("/courses/{course_id}/learning-history")
 def list_course_learning_history(course_id: int, user_id: int = 1, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     require_course(db, course_id, user_id)
+    daily_plans = db.scalars(
+        select(LearningSuggestion)
+        .where(
+            LearningSuggestion.course_id == course_id,
+            LearningSuggestion.user_id == user_id,
+            LearningSuggestion.title.like("每日学习计划 %"),
+        )
+        .order_by(LearningSuggestion.title.desc(), LearningSuggestion.id.desc())
+    ).all()
     checkins = db.scalars(
         select(LearningCheckin)
         .where(
             LearningCheckin.course_id == course_id,
             LearningCheckin.user_id == user_id,
-            LearningCheckin.status == "completed",
         )
         .order_by(LearningCheckin.study_date.desc(), LearningCheckin.created_at.desc(), LearningCheckin.id.desc())
     ).all()
-    plan_ids = {checkin.plan_id for checkin in checkins if checkin.plan_id is not None}
-    plans_by_id = {
-        plan.id: plan.content
-        for plan in db.scalars(select(LearningSuggestion).where(LearningSuggestion.id.in_(plan_ids))).all()
-    } if plan_ids else {}
 
     history_by_date: dict[str, dict[str, object]] = {}
+    for plan in daily_plans:
+        study_date = plan.title.removeprefix("每日学习计划 ").strip()
+        if not study_date:
+            continue
+        history_by_date.setdefault(
+            study_date,
+            {
+                "study_date": study_date,
+                "minutes": 0,
+                "difficulty": None,
+                "feedback": None,
+                "plan": plan.content,
+                "plan_status": plan.status,
+                "planned_at": plan.created_at,
+                "completed_at": None,
+                "checkin_count": 0,
+                "latest_status": "not_started",
+                "feedbacks": [],
+            },
+        )
+
     for checkin in checkins:
         record = history_by_date.setdefault(
             checkin.study_date,
@@ -263,20 +303,38 @@ def list_course_learning_history(course_id: int, user_id: int = 1, db: Session =
                 "difficulty": None,
                 "feedback": None,
                 "plan": None,
-                "completed_at": checkin.created_at,
+                "plan_status": None,
+                "planned_at": None,
+                "completed_at": None,
                 "checkin_count": 0,
+                "latest_status": checkin.status,
+                "feedbacks": [],
             },
         )
         record["minutes"] = int(record["minutes"]) + checkin.minutes
         record["checkin_count"] = int(record["checkin_count"]) + 1
+        feedbacks = record["feedbacks"]
+        if isinstance(feedbacks, list):
+            feedbacks.append(
+                {
+                    "id": checkin.id,
+                    "status": checkin.status,
+                    "minutes": checkin.minutes,
+                    "difficulty": checkin.difficulty,
+                    "feedback": checkin.feedback,
+                    "created_at": checkin.created_at,
+                }
+            )
         if record["difficulty"] is None and checkin.difficulty:
             record["difficulty"] = checkin.difficulty
         if record["feedback"] is None and checkin.feedback:
             record["feedback"] = checkin.feedback
-        if record["plan"] is None and checkin.plan_id is not None:
-            record["plan"] = plans_by_id.get(checkin.plan_id)
+        if record["completed_at"] is None and checkin.status == "completed":
+            record["completed_at"] = checkin.created_at
+        if int(record["checkin_count"]) == 1:
+            record["latest_status"] = checkin.status
 
-    return list(history_by_date.values())
+    return [history_by_date[study_date] for study_date in sorted(history_by_date, reverse=True)]
 
 
 def clamp_percent(value: float) -> int:
