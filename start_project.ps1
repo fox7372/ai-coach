@@ -42,9 +42,13 @@ function Get-PortListenerPid {
 }
 
 function Ensure-DockerEngine {
-  $null = & docker version --format '{{.Server.Version}}' 2>$null
-  if ($LASTEXITCODE -eq 0) {
-    return
+  try {
+    $null = & docker version --format '{{.Server.Version}}' 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      return
+    }
+  } catch {
+    # Docker Desktop is installed but the engine is not ready yet.
   }
 
   $dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
@@ -57,9 +61,13 @@ function Ensure-DockerEngine {
   $deadline = (Get-Date).AddSeconds(90)
   do {
     Start-Sleep -Seconds 3
-    $null = & docker version --format '{{.Server.Version}}' 2>$null
-    if ($LASTEXITCODE -eq 0) {
-      return
+    try {
+      $null = & docker version --format '{{.Server.Version}}' 2>$null
+      if ($LASTEXITCODE -eq 0) {
+        return
+      }
+    } catch {
+      # Keep waiting until Docker Desktop starts the engine.
     }
   } while ((Get-Date) -lt $deadline)
 

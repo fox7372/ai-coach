@@ -3,7 +3,7 @@
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 
-$VenvPath = Join-Path $ProjectRoot ".venv"
+$VenvPath = Join-Path $ProjectRoot ".venv-win"
 $VenvPython = Join-Path $VenvPath "Scripts\python.exe"
 $Requirements = Join-Path $ProjectRoot "requirements.txt"
 $RequirementsStamp = Join-Path $VenvPath ".requirements.stamp"
@@ -111,8 +111,9 @@ function Get-PortListenerPids {
 }
 
 if (!(Test-Path $VenvPython)) {
-  if (Test-Path $VenvPath) {
-    throw "检测到 backend/.venv，但其中没有 Windows 版 Scripts/python.exe。该目录可能由 WSL/Linux 创建；请在确认不再使用后手动删除或重命名 backend/.venv，再重新运行本脚本。"
+  $LinuxVenvPath = Join-Path $ProjectRoot ".venv"
+  if ((Test-Path $LinuxVenvPath) -and !(Test-Path (Join-Path $LinuxVenvPath "Scripts\python.exe"))) {
+    Write-Host "检测到 backend/.venv 是 WSL/Linux 虚拟环境；Windows 后端将使用 backend/.venv-win。" -ForegroundColor Yellow
   }
 
   $BasePython = Get-BasePython
